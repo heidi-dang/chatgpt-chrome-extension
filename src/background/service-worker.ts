@@ -2,16 +2,37 @@ import { ExtensionCoordinator } from "./coordinator.js";
 import { chromeLocalStorage, DeviceStateRepository } from "../state/device-state.js";
 import { chromeSessionStorage, PendingPairingRepository } from "../state/pairing-state.js";
 import { DeviceControlTransport } from "../transport/websocket.js";
+import { DeviceVisualTransport } from "../transport/visual-websocket.js";
+import { BrowserSessionRuntime } from "./browser-session-runtime.js";
 
 const deviceState = new DeviceStateRepository(chromeLocalStorage());
 const pairingState = new PendingPairingRepository(chromeSessionStorage());
+const visualTransport = new DeviceVisualTransport({ stateRepository: deviceState });
+const browserRuntime = new BrowserSessionRuntime(visualTransport);
 const transport = new DeviceControlTransport({
   stateRepository: deviceState,
-  onMessage: () => undefined,
+  onMessage: (message) => {
+    if (message.type !== "browser.command") return;
+    void browserRuntime.handle(message).then((result) => {
+      transport.send({
+        protocol_version: 1,
+        type: result.type,
+        device_id: message.device_id,
+        session_id: message.session_id,
+        surface_id: message.surface_id,
+        sequence: message.sequence,
+        timestamp: new Date().toISOString(),
+        source: "extension",
+        mode: message.mode,
+        command_id: result.commandId,
+        payload: result.payload,
+      });
+    });
+  },
 });
 const coordinator = new ExtensionCoordinator({ deviceState, pairingState, transport });
 
-void transport.start();
+void Promise.all([transport.start(), visualTransport.start()]);
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.runtime.openOptionsPage();

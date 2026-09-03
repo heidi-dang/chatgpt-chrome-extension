@@ -81,6 +81,13 @@ export class DeviceControlTransport {
     return true;
   }
 
+  send(message: Record<string, unknown>): boolean {
+    const socket = this.socket;
+    if (!socket || !this.authenticated || socket.readyState !== 1) return false;
+    socket.send(JSON.stringify(message));
+    return true;
+  }
+
   stop(): void {
     this.stopped = true;
     this.authenticated = false;

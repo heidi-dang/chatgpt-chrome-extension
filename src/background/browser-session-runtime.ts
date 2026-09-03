@@ -1,0 +1,225 @@
+import { DebuggerController } from "../browser/debugger.js";
+import { BrowserInputController } from "../browser/input.js";
+import { NavigationController } from "../browser/navigation.js";
+import { ScreenshotController } from "../browser/screenshot.js";
+import { AccessibilitySnapshotController } from "../browser/snapshot.js";
+import { SnapshotRefs } from "../browser/snapshot-refs.js";
+import { TabsController } from "../browser/tabs.js";
+import { CanvasFrameMasker, PrivacyCurtainPolicy } from "../privacy/masking.js";
+import { BrowserLease } from "../sessions/leases.js";
+import { BoundedCommandDedupe } from "../transport/idempotency.js";
+import type { BrowserCommandMessage, BrowserMode } from "../transport/protocol.js";
+import { BrowserFramePump } from "../transport/frame-pump.js";
+import type { DeviceVisualTransport } from "../transport/visual-websocket.js";
+
+export type RuntimeResult = {
+  type: "browser.command.completed" | "browser.command.failed";
+  commandId: string;
+  payload: Record<string, unknown>;
+};
+
+export class BrowserSessionRuntime {
+  private readonly debuggerController = new DebuggerController();
+  private readonly tabs = new TabsController();
+  private readonly refs = new SnapshotRefs();
+  private readonly snapshots = new AccessibilitySnapshotController(this.debuggerController, this.refs);
+  private readonly input = new BrowserInputController(this.debuggerController, this.refs);
+  private readonly navigation = new NavigationController(this.debuggerController);
+  private readonly screenshots = new ScreenshotController(
+    this.debuggerController,
+    new CanvasFrameMasker(),
+    new PrivacyCurtainPolicy([]),
+  );
+  private readonly dedupe = new BoundedCommandDedupe();
+  private readonly framePump: BrowserFramePump;
+  private lease: BrowserLease | null = null;
+  private tabId: number | null = null;
+  private sessionId: string | null = null;
+  private mode: BrowserMode = "DISCONNECTED";
+
+  constructor(visualTransport: DeviceVisualTransport) {
+    this.framePump = new BrowserFramePump(this.screenshots, visualTransport);
+  }
+
+  async handle(message: BrowserCommandMessage): Promise<RuntimeResult> {
+    if (!this.dedupe.markIfNew(message.command_id)) {
+      return {
+        type: "browser.command.completed",
+        commandId: message.command_id,
+        payload: { duplicate: true },
+      };
+    }
+    try {
+      const payload = await this.execute(message);
+      return { type: "browser.command.completed", commandId: message.command_id, payload };
+    } catch (error) {
+      return {
+        type: "browser.command.failed",
+        commandId: message.command_id,
+        payload: { error: error instanceof Error ? error.message : "Browser command failed" },
+      };
+    }
+  }
+
+  stop(): void {
+    this.framePump.stop();
+    this.refs.invalidate();
+    this.lease = null;
+    this.tabId = null;
+    this.sessionId = null;
+    this.mode = "DISCONNECTED";
+  }
+
+  private async execute(message: BrowserCommandMessage): Promise<Record<string, unknown>> {
+    const { action, expected_epoch: expectedEpoch, args } = message.payload;
+    if (action === "attach") {
+      const tabId = this.requireInt(args.tab_id, "attach requires tab_id");
+      await this.debuggerController.attach(tabId);
+      const tab = await this.tabs.get(tabId);
+      this.tabId = tabId;
+      this.sessionId = message.session_id;
+      this.mode = message.mode;
+      this.lease = new BrowserLease({ deviceId: message.device_id, tabId, sessionId: message.session_id });
+      const lease = this.lease.acquireAgent();
+      this.updateFramePump(tab.url, false);
+      return { tab, lease };
+    }
+    if (action === "detach") {
+      const tabId = this.requireTab();
+      await this.debuggerController.detach(tabId);
+      this.stop();
+      return { detached: true };
+    }
+    const tabId = this.requireTab();
+    const lease = this.requireLease();
+    if (expectedEpoch !== undefined) lease.assertMutation("agent", expectedEpoch);
+    this.mode = message.mode;
+
+    switch (action) {
+      case "status":
+        return { attached: this.debuggerController.isAttached(tabId), tab: await this.tabs.get(tabId), lease: lease.snapshot() };
+      case "get_tab":
+        return { tab: await this.tabs.get(tabId) };
+      case "activate_tab":
+        return { tab: await this.tabs.activate(this.requireInt(args.tab_id, "activate_tab requires tab_id")) };
+      case "list_tabs":
+        return { tabs: await this.tabs.list() };
+      case "navigate": {
+        const url = this.requireString(args.url, "navigate requires url");
+        const result = await this.navigation.navigate(tabId, url);
+        this.refs.invalidate();
+        this.updateFramePump(url, true);
+        return { navigation: result };
+      }
+      case "back":
+        this.refs.invalidate();
+        return { navigated: await this.navigation.back(tabId) };
+      case "forward":
+        this.refs.invalidate();
+        return { navigated: await this.navigation.forward(tabId) };
+      case "reload":
+        this.refs.invalidate();
+        await this.navigation.reload(tabId, Boolean(args.ignore_cache));
+        return { reloaded: true };
+      case "stop":
+        await this.navigation.stop(tabId);
+        return { stopped: true };
+      case "snapshot": {
+        const snapshot = await this.snapshots.capture(tabId);
+        this.updateFramePump((await this.tabs.get(tabId)).url, false);
+        return snapshot;
+      }
+      case "screenshot": {
+        const options = typeof args.quality === "number" ? { quality: args.quality } : {};
+        const result = await this.screenshots.capture(tabId, (await this.tabs.get(tabId)).url, options);
+        return {
+          mimeType: result.mimeType,
+          data: result.data,
+          blocked: result.blocked,
+          maskedRegions: result.maskedRegions,
+        };
+      }
+      case "click":
+        await this.input.click(tabId, this.requireString(args.ref, "click requires ref"), this.requireSnapshotId(args));
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { clicked: true };
+      case "double_click":
+        await this.input.click(tabId, this.requireString(args.ref, "double_click requires ref"), this.requireSnapshotId(args), { clickCount: 2 });
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { clicked: true };
+      case "right_click":
+        await this.input.click(tabId, this.requireString(args.ref, "right_click requires ref"), this.requireSnapshotId(args), { button: "right" });
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { clicked: true };
+      case "hover":
+        await this.input.hover(tabId, this.requireString(args.ref, "hover requires ref"), this.requireSnapshotId(args));
+        return { hovered: true };
+      case "type":
+        await this.input.type(tabId, this.requireString(args.ref, "type requires ref"), this.requireSnapshotId(args), this.requireString(args.text, "type requires text"));
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { typed: true };
+      case "fill":
+        await this.input.fill(tabId, this.requireString(args.ref, "fill requires ref"), this.requireSnapshotId(args), this.requireString(args.text, "fill requires text"));
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { filled: true };
+      case "press_key":
+        await this.input.pressKey(tabId, this.requireString(args.key, "press_key requires key"));
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { pressed: true };
+      case "scroll":
+        await this.input.scroll(
+          tabId,
+          typeof args.delta_x === "number" ? args.delta_x : 0,
+          typeof args.delta_y === "number" ? args.delta_y : 600,
+        );
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { scrolled: true };
+      case "focus":
+        await this.input.focus(tabId, this.requireString(args.ref, "focus requires ref"), this.requireSnapshotId(args));
+        return { focused: true };
+      default:
+        throw new Error(`Browser action is not implemented by this extension build: ${action}`);
+    }
+  }
+
+  private updateFramePump(url: string, interacting: boolean): void {
+    if (this.tabId === null || !this.sessionId) return;
+    this.framePump.update({
+      sessionId: this.sessionId,
+      tabId: this.tabId,
+      url,
+      mode: this.mode,
+      visible: true,
+      interacting,
+      backgrounded: false,
+      viewportWidth: 1280,
+      viewportHeight: 720,
+    });
+  }
+
+  private requireTab(): number {
+    if (this.tabId === null) throw new Error("No Chrome tab is attached to the browser session");
+    return this.tabId;
+  }
+
+  private requireLease(): BrowserLease {
+    if (!this.lease) throw new Error("Browser session lease is unavailable");
+    return this.lease;
+  }
+
+  private requireSnapshotId(args: Record<string, unknown>): string {
+    const snapshotId = typeof args.snapshot_id === "string" ? args.snapshot_id : this.refs.currentSnapshotId;
+    if (!snapshotId) throw new Error("A current snapshot_id is required for ref-based interaction");
+    return snapshotId;
+  }
+
+  private requireString(value: unknown, message: string): string {
+    if (typeof value !== "string" || !value) throw new Error(message);
+    return value;
+  }
+
+  private requireInt(value: unknown, message: string): number {
+    if (!Number.isSafeInteger(value)) throw new Error(message);
+    return value as number;
+  }
+}
