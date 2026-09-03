@@ -6,6 +6,7 @@ import { ScreenshotController } from "../browser/screenshot.js";
 import { AccessibilitySnapshotController } from "../browser/snapshot.js";
 import { SnapshotRefs } from "../browser/snapshot-refs.js";
 import { TabsController } from "../browser/tabs.js";
+import { WindowsController } from "../browser/windows.js";
 import { CanvasFrameMasker, PrivacyCurtainPolicy } from "../privacy/masking.js";
 import { BrowserLease } from "../sessions/leases.js";
 import { BoundedCommandDedupe } from "../transport/idempotency.js";
@@ -34,6 +35,7 @@ export type BrowserPrepareReturnMessage = ServerMessage & {
 export class BrowserSessionRuntime {
   private readonly debuggerController = new DebuggerController();
   private readonly tabs = new TabsController();
+  private readonly windows = new WindowsController();
   private readonly refs = new SnapshotRefs();
   private readonly snapshots = new AccessibilitySnapshotController(this.debuggerController, this.refs);
   private readonly input = new BrowserInputController(this.debuggerController, this.refs);
@@ -255,6 +257,14 @@ export class BrowserSessionRuntime {
         const targetTabId = args.tab_id === undefined ? tabId : this.requireInt(args.tab_id, "duplicate_tab requires tab_id");
         return { tab: await this.tabs.duplicate(targetTabId) };
       }
+      case "list_windows":
+        return { windows: await this.windows.list() };
+      case "new_window": {
+        const url = typeof args.url === "string" && args.url ? args.url : undefined;
+        return { window: await this.windows.create(url) };
+      }
+      case "focus_window":
+        return { window: await this.windows.focus(this.requireInt(args.window_id, "focus_window requires window_id")) };
       case "navigate": {
         const url = this.requireString(args.url, "navigate requires url");
         const result = await this.navigation.navigate(tabId, url);

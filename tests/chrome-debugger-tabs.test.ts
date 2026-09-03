@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DebuggerController, UnsupportedCdpCommandError, type DebuggerApiLike } from "../src/browser/debugger.js";
 import { TabsController, type TabsApiLike } from "../src/browser/tabs.js";
+import { WindowsController, type WindowsApiLike } from "../src/browser/windows.js";
 
 describe("chrome.debugger lifecycle", () => {
   it("attaches idempotently and records detach transitions", async () => {
@@ -35,6 +36,26 @@ describe("chrome.debugger lifecycle", () => {
 
     await expect(controller.send(1, "Browser.grantPermissions", {})).rejects.toBeInstanceOf(UnsupportedCdpCommandError);
     expect(api.sendCommand).not.toHaveBeenCalled();
+  });
+});
+
+describe("window API boundary", () => {
+  it("returns bounded safe window metadata, creates, and focuses windows", async () => {
+    const api: WindowsApiLike = {
+      getAll: vi.fn(async () => [{ id: 3, focused: false, incognito: false, state: "normal", type: "normal", top: 10, left: 20, width: 1200, height: 800 } as chrome.windows.Window]),
+      create: vi.fn(async (data) => ({ id: 4, focused: data?.focused ?? false, incognito: false, state: "normal", type: "normal" } as chrome.windows.Window)),
+      update: vi.fn(async (id, info) => ({ id, focused: info.focused ?? false, incognito: false, state: "normal", type: "normal" } as chrome.windows.Window)),
+    };
+    const windows = new WindowsController(api);
+
+    expect(await windows.list()).toEqual([{
+      id: 3, focused: false, incognito: false, state: "normal", type: "normal",
+      top: 10, left: 20, width: 1200, height: 800,
+    }]);
+    expect((await windows.create("https://example.com")).id).toBe(4);
+    expect(api.create).toHaveBeenCalledWith({ url: "https://example.com", focused: true });
+    expect((await windows.focus(3)).focused).toBe(true);
+    expect(api.update).toHaveBeenCalledWith(3, { focused: true });
   });
 });
 
