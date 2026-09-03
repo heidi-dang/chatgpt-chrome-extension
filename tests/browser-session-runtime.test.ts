@@ -19,6 +19,46 @@ function envelope<T extends Record<string, unknown>>(type: string, payload: T) {
   };
 }
 
+describe("BrowserSessionRuntime pre-session discovery", () => {
+  it("lists sanitized Chrome tabs before any tab is attached", async () => {
+    const debuggerApi = {
+      attach: vi.fn(async () => undefined),
+      detach: vi.fn(async () => undefined),
+      sendCommand: vi.fn(async () => ({})),
+      onDetach: { addListener: vi.fn() },
+    };
+    const tabsApi = {
+      query: vi.fn(async () => [
+        { id: 7, windowId: 1, active: true, title: "GitHub", url: "https://github.com/example?token=secret", status: "complete", pinned: false, incognito: false },
+      ]),
+      get: vi.fn(),
+      update: vi.fn(),
+      create: vi.fn(),
+      remove: vi.fn(),
+      duplicate: vi.fn(),
+    };
+    vi.stubGlobal("chrome", { debugger: debuggerApi, tabs: tabsApi });
+    const runtime = new BrowserSessionRuntime(visualTransport as never);
+    const discover = {
+      ...envelope("browser.command", { action: "list_tabs", args: {} }),
+      command_id: "cmd_list_tabs",
+      mode: "OBSERVING",
+      session_id: "device_bdv_1",
+      surface_id: "device_bdv_1",
+    } as BrowserCommandMessage;
+
+    const result = await runtime.handle(discover);
+
+    expect(result.type).toBe("browser.command.completed");
+    const tabs = result.payload.tabs as Array<{ id: number; active: boolean; url: string }>;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]?.id).toBe(7);
+    expect(tabs[0]?.active).toBe(true);
+    expect(tabs[0]?.url).toContain("token=%5BREDACTED%5D");
+    expect(debuggerApi.attach).not.toHaveBeenCalled();
+  });
+});
+
 describe("BrowserSessionRuntime restart recovery", () => {
   it("restores the persisted HUMAN lease before replayed commands can mutate", async () => {
     const sendCommand = vi.fn<(source: chrome.debugger.Debuggee, method: string, params?: object) => Promise<object>>();

@@ -242,6 +242,12 @@ export class BrowserSessionRuntime {
       this.stop();
       return { detached: true };
     }
+    // Tab discovery is intentionally available before a browser session is
+    // attached. CPTR uses this read-only command to resolve a real tab_id
+    // without creating a circular open_session -> list_tabs dependency.
+    if (action === "list_tabs") {
+      return { tabs: await this.tabs.list() };
+    }
     const tabId = this.requireTab();
     const lease = this.requireLease();
     if (expectedEpoch !== undefined) lease.assertMutation("agent", expectedEpoch);
@@ -254,8 +260,6 @@ export class BrowserSessionRuntime {
         return { tab: await this.tabs.get(tabId) };
       case "activate_tab":
         return { tab: await this.tabs.activate(this.requireInt(args.tab_id, "activate_tab requires tab_id")) };
-      case "list_tabs":
-        return { tabs: await this.tabs.list() };
       case "open_tab": {
         const url = typeof args.url === "string" && args.url ? args.url : undefined;
         return { tab: await this.tabs.open(url) };

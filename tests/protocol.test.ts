@@ -60,6 +60,22 @@ describe("browser wire protocol", () => {
     })).toThrow(/action|invalid/i);
   });
 
+  it("does not advertise the intentionally unsupported upload_file action", () => {
+    expect(() => parseServerMessage({
+      protocol_version: PROTOCOL_VERSION,
+      session_id: "brs_session",
+      surface_id: "wbs_surface",
+      device_id: "bdv_device",
+      sequence: 3,
+      timestamp: "2026-09-03T01:00:00.000Z",
+      source: "cptr",
+      mode: "AGENT_CONTROL",
+      type: "browser.command",
+      command_id: "cmd_upload",
+      payload: { action: "upload_file", expected_epoch: 1, args: {} },
+    })).toThrow(/action|invalid/i);
+  });
+
   it("requires an epoch for mutating agent commands", () => {
     expect(() => parseServerMessage({
       protocol_version: PROTOCOL_VERSION,
