@@ -3,6 +3,7 @@ import type { CdpSender } from "./snapshot.js";
 
 type Point = { x: number; y: number };
 type BoxModelResponse = { model?: { content?: number[]; border?: number[] } };
+type ResolveNodeResponse = { object?: { objectId?: string } };
 
 function centerOfQuad(values: number[] | undefined): Point {
   if (!values || values.length < 8) throw new Error("Element has no interactable box model");
@@ -84,6 +85,36 @@ export class BrowserInputController {
     await this.cdp.send(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", ...source, button: "left", clickCount: 1 });
     await this.cdp.send(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", ...target, button: "left", buttons: 1 });
     await this.cdp.send(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", ...target, button: "left", clickCount: 1 });
+  }
+
+  async selectOption(tabId: number, ref: string, snapshotId: string, value: string): Promise<void> {
+    const objectId = await this.resolveObjectId(tabId, ref, snapshotId);
+    await this.cdp.send(tabId, "Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: "function(value){if(!(this instanceof HTMLSelectElement))throw new Error('Target is not a select');const option=[...this.options].find((item)=>item.value===value||item.label===value||item.text===value);if(!option)throw new Error('Option not found');this.value=option.value;this.dispatchEvent(new Event('input',{bubbles:true}));this.dispatchEvent(new Event('change',{bubbles:true}));}",
+      arguments: [{ value }],
+      awaitPromise: false,
+      returnByValue: true,
+    });
+  }
+
+  async setChecked(tabId: number, ref: string, snapshotId: string, checked: boolean): Promise<void> {
+    const objectId = await this.resolveObjectId(tabId, ref, snapshotId);
+    await this.cdp.send(tabId, "Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: "function(checked){if(!(this instanceof HTMLInputElement)||(this.type!=='checkbox'&&this.type!=='radio'))throw new Error('Target is not checkable');if(this.checked===checked)return;this.checked=checked;this.dispatchEvent(new Event('input',{bubbles:true}));this.dispatchEvent(new Event('change',{bubbles:true}));}",
+      arguments: [{ value: checked }],
+      awaitPromise: false,
+      returnByValue: true,
+    });
+  }
+
+  private async resolveObjectId(tabId: number, ref: string, snapshotId: string): Promise<string> {
+    const node = this.refs.resolve(ref, snapshotId);
+    const response = await this.cdp.send(tabId, "DOM.resolveNode", { backendNodeId: node.backendNodeId }) as ResolveNodeResponse;
+    const objectId = response.object?.objectId;
+    if (!objectId) throw new Error("Referenced DOM node could not be resolved");
+    return objectId;
   }
 
   private async dispatchKey(tabId: number, type: "rawKeyDown" | "keyUp", key: string, code: string, modifiers: number): Promise<void> {

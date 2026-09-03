@@ -399,6 +399,23 @@ export class BrowserSessionRuntime {
         );
         this.updateFramePump((await this.tabs.get(tabId)).url, true);
         return { dragged: true };
+      case "select_option":
+        await this.input.selectOption(
+          tabId,
+          this.requireString(args.ref, "select_option requires ref"),
+          this.requireSnapshotId(args),
+          this.requireString(args.value, "select_option requires value"),
+        );
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { selected: true };
+      case "check":
+        await this.input.setChecked(tabId, this.requireString(args.ref, "check requires ref"), this.requireSnapshotId(args), true);
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { checked: true };
+      case "uncheck":
+        await this.input.setChecked(tabId, this.requireString(args.ref, "uncheck requires ref"), this.requireSnapshotId(args), false);
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { checked: false };
       case "focus":
         await this.input.focus(tabId, this.requireString(args.ref, "focus requires ref"), this.requireSnapshotId(args));
         return { focused: true };

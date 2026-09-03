@@ -30,6 +30,9 @@ class FakeCdp {
     if (method === "DOM.describeNode") {
       return { node: { nodeValue: "Visible text Bearer abc.def", attributes: ["aria-label", "Email", "value", "hunter2", "data-token", "secret"] } };
     }
+    if (method === "DOM.resolveNode") {
+      return { object: { objectId: "obj_18" } };
+    }
     if (method === "Page.printToPDF") {
       return { data: "pdf-base64" };
     }
@@ -129,6 +132,25 @@ describe("ref-based input", () => {
       method: "Input.dispatchMouseEvent",
       params: { type: "mouseReleased", x: 60, y: 40, button: "left", clickCount: 1 },
     });
+  });
+
+  it("uses only fixed node-scoped functions for select/check controls", async () => {
+    const cdp = new FakeCdp();
+    const refs = new SnapshotRefs();
+    refs.replace("snap_1", new Map([["ref_18", { backendNodeId: 18 }]]));
+    const input = new BrowserInputController(cdp, refs);
+
+    await input.selectOption(7, "ref_18", "snap_1", "AU");
+    await input.setChecked(7, "ref_18", "snap_1", true);
+    await input.setChecked(7, "ref_18", "snap_1", false);
+
+    const calls = cdp.calls.filter((call) => call.method === "Runtime.callFunctionOn");
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.params).toMatchObject({ objectId: "obj_18", arguments: [{ value: "AU" }], awaitPromise: false, returnByValue: true });
+    expect(String((calls[0]?.params as { functionDeclaration?: string }).functionDeclaration)).toContain("HTMLSelectElement");
+    expect(String((calls[1]?.params as { functionDeclaration?: string }).functionDeclaration)).toContain("HTMLInputElement");
+    expect(String((calls[1]?.params as { functionDeclaration?: string }).functionDeclaration)).not.toContain("AU");
+    await expect(input.selectOption(7, "ref_18", "snap_old", "AU")).rejects.toThrow(/stale/i);
   });
 
   it("clears and fills a ref using focus + key events instead of arbitrary page evaluation", async () => {
