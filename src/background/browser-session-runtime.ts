@@ -1,6 +1,7 @@
 import { DebuggerController } from "../browser/debugger.js";
 import { BrowserInputController } from "../browser/input.js";
 import { HumanInputController } from "../browser/human-input.js";
+import { DomInspectionController, findInSnapshot } from "../browser/dom-inspection.js";
 import { NavigationController } from "../browser/navigation.js";
 import { ScreenshotController } from "../browser/screenshot.js";
 import { AccessibilitySnapshotController } from "../browser/snapshot.js";
@@ -40,6 +41,7 @@ export class BrowserSessionRuntime {
   private readonly snapshots = new AccessibilitySnapshotController(this.debuggerController, this.refs);
   private readonly input = new BrowserInputController(this.debuggerController, this.refs);
   private readonly humanInput = new HumanInputController(this.debuggerController);
+  private readonly domInspection = new DomInspectionController(this.debuggerController, this.refs);
   private readonly navigation = new NavigationController(this.debuggerController);
   private readonly screenshots = new ScreenshotController(
     this.debuggerController,
@@ -52,6 +54,7 @@ export class BrowserSessionRuntime {
   private tabId: number | null = null;
   private sessionId: string | null = null;
   private mode: BrowserMode = "DISCONNECTED";
+  private latestSnapshotText = "";
 
   constructor(
     visualTransport: DeviceVisualTransport,
@@ -205,6 +208,7 @@ export class BrowserSessionRuntime {
     this.tabId = null;
     this.sessionId = null;
     this.mode = "DISCONNECTED";
+    this.latestSnapshotText = "";
   }
 
   private async execute(message: BrowserCommandMessage): Promise<Record<string, unknown>> {
@@ -269,17 +273,21 @@ export class BrowserSessionRuntime {
         const url = this.requireString(args.url, "navigate requires url");
         const result = await this.navigation.navigate(tabId, url);
         this.refs.invalidate();
+        this.latestSnapshotText = "";
         this.updateFramePump(url, true);
         return { navigation: result };
       }
       case "back":
         this.refs.invalidate();
+        this.latestSnapshotText = "";
         return { navigated: await this.navigation.back(tabId) };
       case "forward":
         this.refs.invalidate();
+        this.latestSnapshotText = "";
         return { navigated: await this.navigation.forward(tabId) };
       case "reload":
         this.refs.invalidate();
+        this.latestSnapshotText = "";
         await this.navigation.reload(tabId, Boolean(args.ignore_cache));
         return { reloaded: true };
       case "stop":
@@ -287,9 +295,42 @@ export class BrowserSessionRuntime {
         return { stopped: true };
       case "snapshot": {
         const snapshot = await this.snapshots.capture(tabId);
+        this.latestSnapshotText = snapshot.text;
         this.updateFramePump((await this.tabs.get(tabId)).url, false);
         return snapshot;
       }
+      case "get_url":
+        return { url: (await this.tabs.get(tabId)).url };
+      case "get_title":
+        return { title: (await this.tabs.get(tabId)).title };
+      case "get_html":
+        return await this.domInspection.getHtml(
+          tabId,
+          this.requireString(args.ref, "get_html requires ref"),
+          this.requireSnapshotId(args),
+        );
+      case "get_text":
+        return await this.domInspection.getText(
+          tabId,
+          this.requireString(args.ref, "get_text requires ref"),
+          this.requireSnapshotId(args),
+        );
+      case "get_attribute":
+        return await this.domInspection.getAttribute(
+          tabId,
+          this.requireString(args.ref, "get_attribute requires ref"),
+          this.requireSnapshotId(args),
+          this.requireString(args.name, "get_attribute requires name"),
+        );
+      case "find":
+        return {
+          matches: findInSnapshot(
+            this.latestSnapshotText,
+            this.requireString(args.query, "find requires query"),
+            typeof args.max_results === "number" ? args.max_results : 50,
+          ),
+          snapshot_id: this.refs.currentSnapshotId,
+        };
       case "screenshot": {
         const options = typeof args.quality === "number" ? { quality: args.quality } : {};
         const result = await this.screenshots.capture(tabId, (await this.tabs.get(tabId)).url, options);

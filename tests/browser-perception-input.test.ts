@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AccessibilitySnapshotController } from "../src/browser/snapshot.js";
 import { BrowserInputController } from "../src/browser/input.js";
+import { DomInspectionController, findInSnapshot } from "../src/browser/dom-inspection.js";
 import { NavigationController } from "../src/browser/navigation.js";
 import { SnapshotRefs } from "../src/browser/snapshot-refs.js";
 
@@ -21,6 +22,12 @@ class FakeCdp {
     }
     if (method === "DOM.getBoxModel") {
       return { model: { content: [10, 20, 110, 20, 110, 60, 10, 60] } };
+    }
+    if (method === "DOM.getOuterHTML") {
+      return { outerHTML: '<input type="password" value="hunter2" data-token="secret">Bearer abc.def' };
+    }
+    if (method === "DOM.describeNode") {
+      return { node: { nodeValue: "Visible text Bearer abc.def", attributes: ["aria-label", "Email", "value", "hunter2", "data-token", "secret"] } };
     }
     if (method === "Page.getNavigationHistory") {
       return {
@@ -45,6 +52,32 @@ describe("accessibility-first perception", () => {
     expect(result.text).toContain('[ref=ref_2] textbox "Password"');
     expect(result.text).not.toContain("hunter2");
     expect(refs.resolve("ref_1", "snap_1")).toEqual({ backendNodeId: 18 });
+  });
+});
+
+describe("bounded DOM inspection", () => {
+  it("uses snapshot-scoped refs and redacts sensitive attributes and bearer strings", async () => {
+    const cdp = new FakeCdp();
+    const refs = new SnapshotRefs();
+    refs.replace("snap_1", new Map([["ref_18", { backendNodeId: 18 }]]));
+    const inspection = new DomInspectionController(cdp, refs);
+
+    const html = await inspection.getHtml(7, "ref_18", "snap_1");
+    const text = await inspection.getText(7, "ref_18", "snap_1");
+    const safeAttribute = await inspection.getAttribute(7, "ref_18", "snap_1", "aria-label");
+    const sensitiveAttribute = await inspection.getAttribute(7, "ref_18", "snap_1", "value");
+
+    expect(html.html).toContain("Bearer [REDACTED]");
+    expect(text.text).toContain("Bearer [REDACTED]");
+    expect(safeAttribute).toEqual({ name: "aria-label", value: "Email" });
+    expect(sensitiveAttribute).toEqual({ name: "value", value: "[REDACTED]" });
+    await expect(inspection.getHtml(7, "ref_18", "snap_old")).rejects.toThrow(/stale/i);
+  });
+
+  it("finds bounded case-insensitive matches in the current accessibility snapshot", () => {
+    expect(findInSnapshot('[ref=ref_1] button "Continue"\n[ref=ref_2] StaticText "Welcome"', "continue", 10)).toEqual([
+      { line: 1, text: '[ref=ref_1] button "Continue"' },
+    ]);
   });
 });
 
