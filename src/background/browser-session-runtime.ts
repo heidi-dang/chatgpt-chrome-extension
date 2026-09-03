@@ -299,6 +299,12 @@ export class BrowserSessionRuntime {
         this.latestSnapshotText = "";
         await this.navigation.reload(tabId, Boolean(args.ignore_cache));
         return { reloaded: true };
+      case "wait_for_navigation":
+        return await this.waitForNavigation(
+          tabId,
+          typeof args.url_contains === "string" ? args.url_contains : undefined,
+          typeof args.timeout_ms === "number" ? args.timeout_ms : 15_000,
+        );
       case "stop":
         await this.navigation.stop(tabId);
         return { stopped: true };
@@ -340,6 +346,12 @@ export class BrowserSessionRuntime {
           ),
           snapshot_id: this.refs.currentSnapshotId,
         };
+      case "wait_for":
+        return await this.waitForSnapshotQuery(
+          tabId,
+          this.requireString(args.query, "wait_for requires query"),
+          typeof args.timeout_ms === "number" ? args.timeout_ms : 15_000,
+        );
       case "screenshot": {
         const options = typeof args.quality === "number" ? { quality: args.quality } : {};
         const result = await this.screenshots.capture(tabId, (await this.tabs.get(tabId)).url, options);
@@ -458,6 +470,41 @@ export class BrowserSessionRuntime {
       default:
         throw new Error(`Browser action is not implemented by this extension build: ${action}`);
     }
+  }
+
+  private async waitForNavigation(tabId: number, urlContains: string | undefined, timeoutMs: number): Promise<Record<string, unknown>> {
+    const deadline = Date.now() + this.boundedTimeout(timeoutMs);
+    let last = await this.tabs.get(tabId);
+    while (Date.now() <= deadline) {
+      last = await this.tabs.get(tabId);
+      const urlMatches = !urlContains || last.url.includes(urlContains);
+      if (last.status === "complete" && urlMatches) return { tab: last, completed: true };
+      await this.delay(100);
+    }
+    throw new Error(`wait_for_navigation timed out at ${last.url}`);
+  }
+
+  private async waitForSnapshotQuery(tabId: number, query: string, timeoutMs: number): Promise<Record<string, unknown>> {
+    const deadline = Date.now() + this.boundedTimeout(timeoutMs);
+    while (Date.now() <= deadline) {
+      const snapshot = await this.snapshots.capture(tabId);
+      this.latestSnapshotText = snapshot.text;
+      const matches = findInSnapshot(snapshot.text, query, 50);
+      if (matches.length > 0) {
+        return { snapshot_id: snapshot.snapshotId, matches, completed: true, truncated: snapshot.truncated };
+      }
+      await this.delay(150);
+    }
+    throw new Error("wait_for timed out before the requested accessibility content appeared");
+  }
+
+  private boundedTimeout(value: number): number {
+    if (!Number.isFinite(value)) return 15_000;
+    return Math.max(100, Math.min(Math.floor(value), 30_000));
+  }
+
+  private async delay(milliseconds: number): Promise<void> {
+    await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
   }
 
   private async persist(): Promise<void> {
