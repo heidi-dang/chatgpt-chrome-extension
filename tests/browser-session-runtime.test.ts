@@ -191,5 +191,14 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
     } as BrowserCommandMessage;
     const accepted = await runtime.handle(freshAgent);
     expect(accepted.type).toBe("browser.command.completed");
+
+    const finished = {
+      ...envelope("browser.handoff.cancelled", { owner: "none", epoch: 12, snapshot_id: freshSnapshotId }),
+      mode: "OBSERVING",
+      sequence: 7,
+    } as BrowserHandoffMessage;
+    await runtime.syncHandoff(finished);
+
+    expect(debuggerApi.detach).toHaveBeenCalledWith({ tabId: 7 });
   });
 });

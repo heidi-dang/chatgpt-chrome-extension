@@ -1,6 +1,6 @@
 {
   "name": "@heidi-dang/chatgpt-chrome-extension",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "description": "Manifest V3 Chrome device endpoint for secure CPTR Live Computer browser control.",

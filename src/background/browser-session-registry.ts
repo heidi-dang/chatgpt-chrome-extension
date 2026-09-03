@@ -76,7 +76,7 @@ export class BrowserSessionRuntimeRegistry {
 
   async stopSession(sessionId: string): Promise<void> {
     const runtime = this.runtimes.get(sessionId);
-    if (runtime) runtime.stop();
+    if (runtime) await runtime.close();
     else await this.sessionState.clear(sessionId);
     this.runtimes.delete(sessionId);
   }

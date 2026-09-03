@@ -194,7 +194,7 @@ export class BrowserSessionRuntime {
       this.refs.invalidate();
       this.mode = "AGENT_CONTROL";
     } else if (owner === "none") {
-      this.stop();
+      await this.close();
       return;
     } else {
       throw new Error("Unsupported browser handoff owner");
@@ -202,6 +202,12 @@ export class BrowserSessionRuntime {
     await this.persist();
     const tabId = this.requireTab();
     this.updateFramePump((await this.tabs.get(tabId)).url, false);
+  }
+
+  async close(): Promise<void> {
+    const tabId = this.tabId;
+    if (tabId !== null) await this.debuggerController.detach(tabId);
+    this.stop();
   }
 
   stop(): void {

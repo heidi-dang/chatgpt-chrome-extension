@@ -87,7 +87,8 @@ describe("BrowserSessionRuntimeRegistry", () => {
     expect(saved.get("brs_github")?.tabId).toBe(7);
     expect(saved.get("brs_replit")?.tabId).toBe(8);
 
-    await registry.handleCommand(command("brs_github", "detach_github", "detach"));
+    await registry.stopSession("brs_github");
+    expect(debuggerApi.detach).toHaveBeenCalledWith({ tabId: 7 });
     await registry.handleCommand(command("brs_replit", "detach_replit", "detach"));
   });
 });
