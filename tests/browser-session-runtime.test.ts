@@ -49,20 +49,21 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
     });
 
     const attach = {
-      ...envelope("browser.command", { action: "attach", args: { tab_id: 7 } }),
+      ...envelope("browser.command", { action: "attach", expected_epoch: 9, args: { tab_id: 7 } }),
       command_id: "cmd_attach",
     } as BrowserCommandMessage;
     const attached = await runtime.handle(attach);
     expect(attached.type).toBe("browser.command.completed");
+    expect((attached.payload.lease as { epoch?: number }).epoch).toBe(9);
 
     const humanHandoff = {
-      ...envelope("browser.handoff.accepted", { owner: "human", epoch: 2, snapshot_id: "snap_1" }),
+      ...envelope("browser.handoff.accepted", { owner: "human", epoch: 10, snapshot_id: "snap_1" }),
       mode: "HUMAN_CONTROL",
     } as BrowserHandoffMessage;
     await runtime.syncHandoff(humanHandoff);
 
     const staleAgent = {
-      ...envelope("browser.command", { action: "scroll", expected_epoch: 1, args: { delta_y: 100 } }),
+      ...envelope("browser.command", { action: "scroll", expected_epoch: 9, args: { delta_y: 100 } }),
       command_id: "cmd_stale",
       mode: "HUMAN_CONTROL",
       sequence: 2,
@@ -72,7 +73,7 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
     expect(String(rejected.payload.error)).toMatch(/lease|owner/i);
 
     const humanInput = {
-      ...envelope("browser.human.input", { input_type: "click", expected_epoch: 2, x: 0.5, y: 0.5 }),
+      ...envelope("browser.human.input", { input_type: "click", expected_epoch: 10, x: 0.5, y: 0.5 }),
       command_id: "human_1",
       mode: "HUMAN_CONTROL",
       sequence: 3,
@@ -81,7 +82,7 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
     expect(humanResult.type).toBe("browser.command.completed");
 
     const prepareReturn = {
-      ...envelope("browser.handoff.prepare_return", { expected_epoch: 2 }),
+      ...envelope("browser.handoff.prepare_return", { expected_epoch: 10 }),
       command_id: "handoff_prepare_1",
       mode: "HUMAN_CONTROL",
       sequence: 4,
@@ -92,14 +93,14 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
     expect(freshSnapshotId).toMatch(/^snap_/);
 
     const returned = {
-      ...envelope("browser.handoff.returned", { owner: "agent", epoch: 3, snapshot_id: freshSnapshotId }),
+      ...envelope("browser.handoff.returned", { owner: "agent", epoch: 11, snapshot_id: freshSnapshotId }),
       mode: "AGENT_CONTROL",
       sequence: 5,
     } as BrowserHandoffMessage;
     await runtime.syncHandoff(returned);
 
     const freshAgent = {
-      ...envelope("browser.command", { action: "scroll", expected_epoch: 3, args: { delta_y: 100 } }),
+      ...envelope("browser.command", { action: "scroll", expected_epoch: 11, args: { delta_y: 100 } }),
       command_id: "cmd_fresh",
       mode: "AGENT_CONTROL",
       sequence: 6,

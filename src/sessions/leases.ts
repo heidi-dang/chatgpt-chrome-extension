@@ -40,11 +40,18 @@ export class BrowserLease {
   }
 
   acquireAgent(snapshotId?: string): BrowserLeaseSnapshot {
+    return this.bootstrapAgent(this.currentEpoch + 1, snapshotId);
+  }
+
+  bootstrapAgent(authoritativeEpoch: number, snapshotId?: string): BrowserLeaseSnapshot {
     if (this.currentOwner !== "none") {
       throw new LeaseError(`Cannot acquire agent lease while owner is ${this.currentOwner}`);
     }
+    if (!Number.isSafeInteger(authoritativeEpoch) || authoritativeEpoch <= this.currentEpoch) {
+      throw new LeaseError(`Authoritative lease epoch must be greater than ${this.currentEpoch}`);
+    }
     this.currentOwner = "agent";
-    this.currentEpoch += 1;
+    this.currentEpoch = authoritativeEpoch;
     this.currentSnapshotId = snapshotId ?? null;
     return this.snapshot();
   }

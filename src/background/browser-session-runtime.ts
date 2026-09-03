@@ -172,7 +172,8 @@ export class BrowserSessionRuntime {
       this.sessionId = message.session_id;
       this.mode = message.mode;
       this.lease = new BrowserLease({ deviceId: message.device_id, tabId, sessionId: message.session_id });
-      const lease = this.lease.acquireAgent();
+      const authoritativeEpoch = expectedEpoch ?? 1;
+      const lease = this.lease.bootstrapAgent(authoritativeEpoch);
       this.updateFramePump(tab.url, false);
       return { tab, lease };
     }
