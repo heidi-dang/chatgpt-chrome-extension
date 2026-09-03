@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { BrowserSessionRuntime, type BrowserHandoffMessage } from "../src/background/browser-session-runtime.js";
+import { BrowserSessionRuntime, type BrowserHandoffMessage, type BrowserPrepareReturnMessage } from "../src/background/browser-session-runtime.js";
 import type { BrowserCommandMessage, HumanInputMessage } from "../src/transport/protocol.js";
 
 const visualTransport = { sendFrame: vi.fn(() => true) };
@@ -44,6 +44,7 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
     const runtime = new BrowserSessionRuntime(visualTransport as never);
     debuggerApi.sendCommand.mockImplementation(async (_source: chrome.debugger.Debuggee, method: string) => {
       if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 1000, clientHeight: 500 } };
+      if (method === "Accessibility.getFullAXTree") return { nodes: [{ backendDOMNodeId: 1, role: { value: "button" }, name: { value: "Continue" } }] };
       return {};
     });
 
@@ -79,10 +80,21 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
     const humanResult = await runtime.handleHumanInput(humanInput);
     expect(humanResult.type).toBe("browser.command.completed");
 
-    const returned = {
-      ...envelope("browser.handoff.returned", { owner: "agent", epoch: 3, snapshot_id: "snap_2" }),
-      mode: "AGENT_CONTROL",
+    const prepareReturn = {
+      ...envelope("browser.handoff.prepare_return", { expected_epoch: 2 }),
+      command_id: "handoff_prepare_1",
+      mode: "HUMAN_CONTROL",
       sequence: 4,
+    } as BrowserPrepareReturnMessage;
+    const prepared = await runtime.prepareReturn(prepareReturn);
+    expect(prepared.type).toBe("browser.command.completed");
+    const freshSnapshotId = String(prepared.payload.snapshot_id ?? "");
+    expect(freshSnapshotId).toMatch(/^snap_/);
+
+    const returned = {
+      ...envelope("browser.handoff.returned", { owner: "agent", epoch: 3, snapshot_id: freshSnapshotId }),
+      mode: "AGENT_CONTROL",
+      sequence: 5,
     } as BrowserHandoffMessage;
     await runtime.syncHandoff(returned);
 
@@ -90,7 +102,7 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
       ...envelope("browser.command", { action: "scroll", expected_epoch: 3, args: { delta_y: 100 } }),
       command_id: "cmd_fresh",
       mode: "AGENT_CONTROL",
-      sequence: 5,
+      sequence: 6,
     } as BrowserCommandMessage;
     const accepted = await runtime.handle(freshAgent);
     expect(accepted.type).toBe("browser.command.completed");

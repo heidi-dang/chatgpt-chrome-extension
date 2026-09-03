@@ -209,6 +209,7 @@ const simpleServerMessageSchema = z.object({
     "browser.ping",
     "browser.session.stop",
     "browser.handoff.accepted",
+    "browser.handoff.prepare_return",
     "browser.handoff.returned",
     "browser.handoff.cancelled",
   ]),

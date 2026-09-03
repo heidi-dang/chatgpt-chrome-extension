@@ -3,7 +3,7 @@ import { chromeLocalStorage, DeviceStateRepository } from "../state/device-state
 import { chromeSessionStorage, PendingPairingRepository } from "../state/pairing-state.js";
 import { DeviceControlTransport } from "../transport/websocket.js";
 import { DeviceVisualTransport } from "../transport/visual-websocket.js";
-import { BrowserSessionRuntime, type BrowserHandoffMessage } from "./browser-session-runtime.js";
+import { BrowserSessionRuntime, type BrowserHandoffMessage, type BrowserPrepareReturnMessage } from "./browser-session-runtime.js";
 
 const deviceState = new DeviceStateRepository(chromeLocalStorage());
 const pairingState = new PendingPairingRepository(chromeSessionStorage());
@@ -11,6 +11,8 @@ const isHandoffMessage = (message: { type: string }): message is BrowserHandoffM
   message.type === "browser.handoff.accepted" ||
   message.type === "browser.handoff.returned" ||
   message.type === "browser.handoff.cancelled";
+const isPrepareReturnMessage = (message: { type: string }): message is BrowserPrepareReturnMessage =>
+  message.type === "browser.handoff.prepare_return";
 
 const visualTransport = new DeviceVisualTransport({ stateRepository: deviceState });
 const browserRuntime = new BrowserSessionRuntime(visualTransport);
@@ -37,6 +39,24 @@ const transport = new DeviceControlTransport({
     }
     if (message.type === "browser.human.input") {
       void browserRuntime.handleHumanInput(message).then((result) => {
+        transport.send({
+          protocol_version: 1,
+          type: result.type,
+          device_id: message.device_id,
+          session_id: message.session_id,
+          surface_id: message.surface_id,
+          sequence: message.sequence,
+          timestamp: new Date().toISOString(),
+          source: "extension",
+          mode: "HUMAN_CONTROL",
+          command_id: result.commandId,
+          payload: result.payload,
+        });
+      });
+      return;
+    }
+    if (isPrepareReturnMessage(message)) {
+      void browserRuntime.prepareReturn(message).then((result) => {
         transport.send({
           protocol_version: 1,
           type: result.type,

@@ -24,6 +24,12 @@ export type BrowserHandoffMessage = ServerMessage & {
   payload: Record<string, unknown>;
 };
 
+export type BrowserPrepareReturnMessage = ServerMessage & {
+  type: "browser.handoff.prepare_return";
+  command_id: string;
+  payload: Record<string, unknown>;
+};
+
 export class BrowserSessionRuntime {
   private readonly debuggerController = new DebuggerController();
   private readonly tabs = new TabsController();
@@ -81,6 +87,38 @@ export class BrowserSessionRuntime {
         type: "browser.command.failed",
         commandId: message.command_id,
         payload: { error: error instanceof Error ? error.message : "Human browser input failed" },
+      };
+    }
+  }
+
+  async prepareReturn(message: BrowserPrepareReturnMessage): Promise<RuntimeResult> {
+    try {
+      if (!this.sessionId || message.session_id !== this.sessionId) throw new Error("Browser session does not match the active tab");
+      const tabId = this.requireTab();
+      const lease = this.requireLease();
+      const expectedEpoch = message.payload.expected_epoch;
+      if (typeof expectedEpoch !== "number" || !Number.isInteger(expectedEpoch) || expectedEpoch < 0) {
+        throw new Error("prepare return requires expected_epoch");
+      }
+      lease.assertMutation("human", expectedEpoch);
+      const snapshot = await this.snapshots.capture(tabId);
+      this.mode = "HUMAN_CONTROL";
+      this.updateFramePump((await this.tabs.get(tabId)).url, false);
+      return {
+        type: "browser.command.completed",
+        commandId: message.command_id,
+        payload: {
+          snapshot_id: snapshot.snapshotId,
+          node_count: snapshot.nodeCount,
+          ref_count: snapshot.refCount,
+          truncated: snapshot.truncated,
+        },
+      };
+    } catch (error) {
+      return {
+        type: "browser.command.failed",
+        commandId: message.command_id,
+        payload: { error: error instanceof Error ? error.message : "Browser handoff preparation failed" },
       };
     }
   }
