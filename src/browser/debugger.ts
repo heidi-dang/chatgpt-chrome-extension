@@ -39,6 +39,9 @@ export interface DebuggerApiLike {
   onDetach: {
     addListener(listener: (source: chrome.debugger.Debuggee, reason: string) => void): void;
   };
+  onEvent?: {
+    addListener(listener: (source: chrome.debugger.Debuggee, method: string, params?: object) => void): void;
+  };
 }
 
 export class UnsupportedCdpCommandError extends Error {
@@ -51,12 +54,17 @@ export class UnsupportedCdpCommandError extends Error {
 export class DebuggerController {
   private readonly attachedTabs = new Set<number>();
   private readonly detachReasons = new Map<number, string>();
+  private readonly eventListeners = new Set<(tabId: number, method: string, params: object) => void>();
 
   constructor(private readonly api: DebuggerApiLike = chrome.debugger as unknown as DebuggerApiLike) {
     this.api.onDetach.addListener((source, reason) => {
       if (source.tabId === undefined) return;
       this.attachedTabs.delete(source.tabId);
       this.detachReasons.set(source.tabId, reason);
+    });
+    this.api.onEvent?.addListener((source, method, params = {}) => {
+      if (source.tabId === undefined || !this.attachedTabs.has(source.tabId)) return;
+      for (const listener of this.eventListeners) listener(source.tabId, method, params);
     });
   }
 
@@ -91,6 +99,11 @@ export class DebuggerController {
 
   lastDetachReason(tabId: number): string | null {
     return this.detachReasons.get(tabId) ?? null;
+  }
+
+  onEvent(listener: (tabId: number, method: string, params: object) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
   }
 
   private assertTabId(tabId: number): void {

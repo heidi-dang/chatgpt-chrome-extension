@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DebuggerController, UnsupportedCdpCommandError, type DebuggerApiLike } from "../src/browser/debugger.js";
+import { DownloadsController, type DownloadsApiLike } from "../src/browser/downloads.js";
 import { TabsController, type TabsApiLike } from "../src/browser/tabs.js";
 import { WindowsController, type WindowsApiLike } from "../src/browser/windows.js";
 
@@ -36,6 +37,50 @@ describe("chrome.debugger lifecycle", () => {
 
     await expect(controller.send(1, "Browser.grantPermissions", {})).rejects.toBeInstanceOf(UnsupportedCdpCommandError);
     expect(api.sendCommand).not.toHaveBeenCalled();
+  });
+});
+
+describe("download API boundary", () => {
+  it("sanitizes download metadata and rejects embedded URL credentials", async () => {
+    const api: DownloadsApiLike = {
+      download: vi.fn(async () => 11),
+      search: vi.fn(async () => [{
+        id: 11,
+        url: "https://example.com/file?token=secret",
+        finalUrl: "https://example.com/file",
+        referrer: "",
+        filename: "/Users/heidi/Downloads/private.pdf",
+        incognito: false,
+        danger: "safe" as const,
+        mime: "application/pdf",
+        startTime: "2026-09-03T00:00:00Z",
+        endTime: "2026-09-03T00:00:01Z",
+        estimatedEndTime: "",
+        state: "complete" as const,
+        paused: false,
+        canResume: false,
+        error: undefined,
+        bytesReceived: 10,
+        totalBytes: 10,
+        fileSize: 10,
+        exists: true,
+        byExtensionId: undefined,
+        byExtensionName: undefined,
+      }]),
+      cancel: vi.fn(async () => undefined),
+    };
+    const downloads = new DownloadsController(api);
+
+    expect(await downloads.start("https://example.com/file")).toEqual({ downloadId: 11 });
+    expect((await downloads.list())[0]).toMatchObject({
+      id: 11,
+      url: "https://example.com/file?token=%5BREDACTED%5D",
+      filename: "private.pdf",
+      state: "complete",
+    });
+    await downloads.cancel(11);
+    expect(api.cancel).toHaveBeenCalledWith(11);
+    await expect(downloads.start("https://user:pass@example.com/file")).rejects.toThrow(/credentials/i);
   });
 });
 

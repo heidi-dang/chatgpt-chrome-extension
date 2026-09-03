@@ -2,7 +2,9 @@ import { DebuggerController } from "../browser/debugger.js";
 import { BrowserInputController } from "../browser/input.js";
 import { HumanInputController } from "../browser/human-input.js";
 import { DomInspectionController, findInSnapshot } from "../browser/dom-inspection.js";
+import { DownloadsController } from "../browser/downloads.js";
 import { NavigationController } from "../browser/navigation.js";
+import { BrowserObservabilityController } from "../browser/observability.js";
 import { PageUtilitiesController } from "../browser/page-utils.js";
 import { ScreenshotController } from "../browser/screenshot.js";
 import { AccessibilitySnapshotController } from "../browser/snapshot.js";
@@ -43,7 +45,9 @@ export class BrowserSessionRuntime {
   private readonly input = new BrowserInputController(this.debuggerController, this.refs);
   private readonly humanInput = new HumanInputController(this.debuggerController);
   private readonly domInspection = new DomInspectionController(this.debuggerController, this.refs);
+  private readonly downloads = new DownloadsController();
   private readonly navigation = new NavigationController(this.debuggerController);
+  private readonly observability = new BrowserObservabilityController(this.debuggerController);
   private readonly pageUtilities = new PageUtilitiesController(this.debuggerController);
   private readonly screenshots = new ScreenshotController(
     this.debuggerController,
@@ -211,6 +215,7 @@ export class BrowserSessionRuntime {
     this.sessionId = null;
     this.mode = "DISCONNECTED";
     this.latestSnapshotText = "";
+    this.observability.clear();
   }
 
   private async execute(message: BrowserCommandMessage): Promise<Record<string, unknown>> {
@@ -428,6 +433,20 @@ export class BrowserSessionRuntime {
         return { handled: true };
       case "print_pdf":
         return await this.pageUtilities.printPdf(tabId, Boolean(args.landscape));
+      case "download":
+        return await this.downloads.start(this.requireString(args.url, "download requires url"));
+      case "list_downloads":
+        return { downloads: await this.downloads.list() };
+      case "cancel_download":
+        await this.downloads.cancel(this.requireInt(args.download_id, "cancel_download requires download_id"));
+        return { cancelled: true };
+      case "network_enable":
+        await this.observability.enable(tabId);
+        return { enabled: true };
+      case "network_events":
+        return { events: this.observability.listNetwork() };
+      case "console":
+        return { events: this.observability.listConsole() };
       default:
         throw new Error(`Browser action is not implemented by this extension build: ${action}`);
     }
