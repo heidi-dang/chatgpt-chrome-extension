@@ -1,12 +1,15 @@
 import { ExtensionCoordinator } from "./coordinator.js";
 import { chromeLocalStorage, DeviceStateRepository } from "../state/device-state.js";
 import { chromeSessionStorage, PendingPairingRepository } from "../state/pairing-state.js";
+import { BrowserSessionStateRepository } from "../state/browser-session-state.js";
 import { DeviceControlTransport } from "../transport/websocket.js";
 import { DeviceVisualTransport } from "../transport/visual-websocket.js";
 import { BrowserSessionRuntime, type BrowserHandoffMessage, type BrowserPrepareReturnMessage } from "./browser-session-runtime.js";
 
 const deviceState = new DeviceStateRepository(chromeLocalStorage());
-const pairingState = new PendingPairingRepository(chromeSessionStorage());
+const sessionStorage = chromeSessionStorage();
+const pairingState = new PendingPairingRepository(sessionStorage);
+const browserSessionState = new BrowserSessionStateRepository(sessionStorage);
 const isHandoffMessage = (message: { type: string }): message is BrowserHandoffMessage =>
   message.type === "browser.handoff.accepted" ||
   message.type === "browser.handoff.returned" ||
@@ -15,7 +18,7 @@ const isPrepareReturnMessage = (message: { type: string }): message is BrowserPr
   message.type === "browser.handoff.prepare_return";
 
 const visualTransport = new DeviceVisualTransport({ stateRepository: deviceState });
-const browserRuntime = new BrowserSessionRuntime(visualTransport);
+const browserRuntime = new BrowserSessionRuntime(visualTransport, browserSessionState);
 const transport = new DeviceControlTransport({
   stateRepository: deviceState,
   onMessage: (message) => {
@@ -82,7 +85,9 @@ const transport = new DeviceControlTransport({
 });
 const coordinator = new ExtensionCoordinator({ deviceState, pairingState, transport });
 
-void Promise.all([transport.start(), visualTransport.start()]);
+void browserRuntime.restore().finally(() => {
+  void Promise.all([transport.start(), visualTransport.start()]);
+});
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.runtime.openOptionsPage();

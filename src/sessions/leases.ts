@@ -43,6 +43,20 @@ export class BrowserLease {
     return this.bootstrapAgent(this.currentEpoch + 1, snapshotId);
   }
 
+  restore(owner: LeaseOwner, authoritativeEpoch: number, snapshotId: string | null): BrowserLeaseSnapshot {
+    if (this.currentOwner !== "none" || this.currentEpoch !== 0) {
+      throw new LeaseError("Browser lease restore is only valid for a fresh local mirror");
+    }
+    if (!Number.isSafeInteger(authoritativeEpoch) || authoritativeEpoch < 0) {
+      throw new LeaseError("Authoritative lease epoch is invalid");
+    }
+    this.currentOwner = owner;
+    this.currentEpoch = authoritativeEpoch;
+    this.currentSnapshotId = snapshotId;
+    this.preHumanSnapshotId = owner === "human" ? snapshotId : null;
+    return this.snapshot();
+  }
+
   bootstrapAgent(authoritativeEpoch: number, snapshotId?: string): BrowserLeaseSnapshot {
     if (this.currentOwner !== "none") {
       throw new LeaseError(`Cannot acquire agent lease while owner is ${this.currentOwner}`);

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DeviceStateRepository, type StorageAreaLike } from "../src/state/device-state.js";
+import { BrowserSessionStateRepository } from "../src/state/browser-session-state.js";
 import { PairingClient, normalizeCptrOrigin } from "../src/transport/pairing.js";
 
 class MemoryStorage implements StorageAreaLike {
@@ -33,6 +34,34 @@ describe("device credential state", () => {
     expect(await repo.load()).toMatchObject({ deviceId: "bdv_1", deviceCredential: "device-secret-0123456789abcdef0123456789abcdef", resumeSequence: 830 });
     expect(JSON.stringify(storage.values)).not.toContain("mcp_token");
     expect(JSON.stringify(storage.values)).not.toContain("bearer_token");
+  });
+});
+
+describe("restart-safe browser session state", () => {
+  it("persists only non-secret session/lease metadata", async () => {
+    const storage = new MemoryStorage();
+    const repo = new BrowserSessionStateRepository(storage);
+    await repo.save({
+      deviceId: "bdv_1",
+      sessionId: "brs_1",
+      tabId: 7,
+      mode: "HUMAN_CONTROL",
+      owner: "human",
+      epoch: 22,
+      snapshotId: "snap_21",
+    });
+
+    expect(await repo.load()).toEqual({
+      deviceId: "bdv_1",
+      sessionId: "brs_1",
+      tabId: 7,
+      mode: "HUMAN_CONTROL",
+      owner: "human",
+      epoch: 22,
+      snapshotId: "snap_21",
+    });
+    const serialized = JSON.stringify(storage.values);
+    expect(serialized).not.toMatch(/credential|cookie|password|text|url|authorization/i);
   });
 });
 

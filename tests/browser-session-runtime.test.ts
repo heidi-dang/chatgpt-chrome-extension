@@ -19,6 +19,50 @@ function envelope<T extends Record<string, unknown>>(type: string, payload: T) {
   };
 }
 
+describe("BrowserSessionRuntime restart recovery", () => {
+  it("restores the persisted HUMAN lease before replayed commands can mutate", async () => {
+    const sendCommand = vi.fn<(source: chrome.debugger.Debuggee, method: string, params?: object) => Promise<object>>();
+    sendCommand.mockResolvedValue({});
+    const debuggerApi = {
+      attach: vi.fn(async () => undefined),
+      detach: vi.fn(async () => undefined),
+      sendCommand,
+      onDetach: { addListener: vi.fn() },
+    };
+    const tabsApi = {
+      query: vi.fn(async () => []),
+      get: vi.fn(async (id: number) => ({ id, windowId: 1, active: true, title: "Restored", url: "https://example.com" })),
+      update: vi.fn(async (id: number) => ({ id, windowId: 1, active: true })),
+      create: vi.fn(async () => ({ id: 8, windowId: 1, active: true })),
+      remove: vi.fn(async () => undefined),
+      duplicate: vi.fn(async (id: number) => ({ id: id + 1, windowId: 1, active: false })),
+    };
+    vi.stubGlobal("chrome", { debugger: debuggerApi, tabs: tabsApi });
+    const sessionState = {
+      load: vi.fn(async () => ({
+        deviceId: "bdv_1", sessionId: "brs_1", tabId: 7,
+        mode: "HUMAN_CONTROL" as const, owner: "human" as const, epoch: 22, snapshotId: "snap_21",
+      })),
+      save: vi.fn(async () => undefined),
+      clear: vi.fn(async () => undefined),
+    };
+    const runtime = new BrowserSessionRuntime(visualTransport as never, sessionState as never);
+
+    expect(await runtime.restore()).toBe(true);
+    expect(debuggerApi.attach).toHaveBeenCalledWith({ tabId: 7 }, "1.3");
+
+    const staleAgent = {
+      ...envelope("browser.command", { action: "scroll", expected_epoch: 22, args: { delta_y: 100 } }),
+      command_id: "cmd_after_restart",
+      mode: "HUMAN_CONTROL",
+      sequence: 23,
+    } as BrowserCommandMessage;
+    const rejected = await runtime.handle(staleAgent);
+    expect(rejected.type).toBe("browser.command.failed");
+    expect(String(rejected.payload.error)).toMatch(/owner|lease/i);
+  });
+});
+
 describe("BrowserSessionRuntime handoff synchronization", () => {
   it("rejects stale agent mutation while human owns the tab, then accepts fresh returned epoch", async () => {
     const sendCommand = vi.fn<(source: chrome.debugger.Debuggee, method: string, params?: object) => Promise<object>>();

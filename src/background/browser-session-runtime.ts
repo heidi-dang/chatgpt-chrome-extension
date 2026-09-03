@@ -12,6 +12,7 @@ import { BoundedCommandDedupe } from "../transport/idempotency.js";
 import type { BrowserCommandMessage, BrowserMode, HumanInputMessage, ServerMessage } from "../transport/protocol.js";
 import { BrowserFramePump } from "../transport/frame-pump.js";
 import type { DeviceVisualTransport } from "../transport/visual-websocket.js";
+import type { BrowserSessionStateRepository } from "../state/browser-session-state.js";
 
 export type RuntimeResult = {
   type: "browser.command.completed" | "browser.command.failed";
@@ -50,8 +51,32 @@ export class BrowserSessionRuntime {
   private sessionId: string | null = null;
   private mode: BrowserMode = "DISCONNECTED";
 
-  constructor(visualTransport: DeviceVisualTransport) {
+  constructor(
+    visualTransport: DeviceVisualTransport,
+    private readonly sessionState?: BrowserSessionStateRepository,
+  ) {
     this.framePump = new BrowserFramePump(this.screenshots, visualTransport);
+  }
+
+  async restore(): Promise<boolean> {
+    const saved = await this.sessionState?.load();
+    if (!saved) return false;
+    try {
+      await this.debuggerController.attach(saved.tabId);
+      const tab = await this.tabs.get(saved.tabId);
+      this.tabId = saved.tabId;
+      this.sessionId = saved.sessionId;
+      this.mode = saved.mode;
+      this.lease = new BrowserLease({ deviceId: saved.deviceId, tabId: saved.tabId, sessionId: saved.sessionId });
+      this.lease.restore(saved.owner, saved.epoch, saved.snapshotId);
+      this.refs.invalidate();
+      this.updateFramePump(tab.url, false);
+      return true;
+    } catch {
+      await this.sessionState?.clear();
+      this.stopLocal();
+      return false;
+    }
   }
 
   async handle(message: BrowserCommandMessage): Promise<RuntimeResult> {
@@ -80,6 +105,7 @@ export class BrowserSessionRuntime {
       const lease = this.requireLease();
       const audit = await this.humanInput.handle(tabId, lease, message);
       this.mode = "HUMAN_CONTROL";
+      await this.persist();
       this.updateFramePump((await this.tabs.get(tabId)).url, true);
       return { type: "browser.command.completed", commandId: message.command_id, payload: audit };
     } catch (error) {
@@ -113,6 +139,7 @@ export class BrowserSessionRuntime {
       lease.assertMutation("human", expectedEpoch);
       const snapshot = await this.snapshots.capture(tabId);
       this.mode = "HUMAN_CONTROL";
+      await this.persist();
       this.updateFramePump((await this.tabs.get(tabId)).url, false);
       return {
         type: "browser.command.completed",
@@ -159,11 +186,17 @@ export class BrowserSessionRuntime {
     } else {
       throw new Error("Unsupported browser handoff owner");
     }
+    await this.persist();
     const tabId = this.requireTab();
     this.updateFramePump((await this.tabs.get(tabId)).url, false);
   }
 
   stop(): void {
+    void this.sessionState?.clear();
+    this.stopLocal();
+  }
+
+  private stopLocal(): void {
     this.framePump.stop();
     this.refs.invalidate();
     this.lease = null;
@@ -184,6 +217,7 @@ export class BrowserSessionRuntime {
       this.lease = new BrowserLease({ deviceId: message.device_id, tabId, sessionId: message.session_id });
       const authoritativeEpoch = expectedEpoch ?? 1;
       const lease = this.lease.bootstrapAgent(authoritativeEpoch);
+      await this.persist();
       this.updateFramePump(tab.url, false);
       return { tab, lease };
     }
@@ -314,6 +348,20 @@ export class BrowserSessionRuntime {
       default:
         throw new Error(`Browser action is not implemented by this extension build: ${action}`);
     }
+  }
+
+  private async persist(): Promise<void> {
+    if (!this.sessionState || this.tabId === null || !this.sessionId || !this.lease) return;
+    const lease = this.lease.snapshot();
+    await this.sessionState.save({
+      deviceId: lease.deviceId,
+      sessionId: lease.sessionId,
+      tabId: lease.tabId,
+      mode: this.mode === "DISCONNECTED" ? "OBSERVING" : this.mode,
+      owner: lease.owner,
+      epoch: lease.epoch,
+      snapshotId: lease.snapshotId,
+    });
   }
 
   private updateFramePump(url: string, interacting: boolean): void {
