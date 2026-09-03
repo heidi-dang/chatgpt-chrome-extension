@@ -1,4 +1,4 @@
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { build } from "esbuild";
 
@@ -11,6 +11,8 @@ await mkdir(dist, { recursive: true });
 
 const entries = [
   ["background/service-worker.ts", "service-worker.js"],
+  ["popup/popup.ts", "popup.js"],
+  ["options/options.ts", "options.js"],
 ];
 
 for (const [input, output] of entries) {
@@ -29,11 +31,13 @@ for (const [input, output] of entries) {
   });
 }
 
-await cp(resolve(src, "manifest.json"), resolve(dist, "manifest.json"));
-
-for (const page of ["popup", "options"]) {
-  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CPTR Live Computer</title></head><body><main><h1>CPTR Live Computer</h1><p>Device pairing UI is being connected to the background coordinator.</p></main></body></html>`;
-  await writeFile(resolve(dist, `${page}.html`), html, "utf8");
+for (const [input, output] of [
+  ["manifest.json", "manifest.json"],
+  ["popup/popup.html", "popup.html"],
+  ["options/options.html", "options.html"],
+  ["ui.css", "ui.css"],
+]) {
+  await cp(resolve(src, input), resolve(dist, output));
 }
 
 console.log("Built CPTR Live Computer extension in dist/");

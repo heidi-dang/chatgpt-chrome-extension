@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CPTR Live Computer Setup</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="page">
+  <main class="card options-card">
+    <header>
+      <p class="eyebrow">CPTR LIVE COMPUTER</p>
+      <h1>Pair this Chrome profile</h1>
+      <p class="muted">Secure browser-device connection by Heidi Dang · <a href="https://github.com/heidi-dang/chatgpt-chrome-extension" target="_blank" rel="noreferrer">GitHub</a></p>
+    </header>
+
+    <section class="status-panel">
+      <strong id="status">Checking device status…</strong>
+    </section>
+
+    <form id="pair-form" class="form-grid">
+      <label>
+        <span>Trusted CPTR origin</span>
+        <input id="cptr-origin" type="url" placeholder="https://your-cptr.example.com" autocomplete="url" required>
+      </label>
+      <label>
+        <span>Device name</span>
+        <input id="device-name" type="text" value="Heidi Chrome" maxlength="120" autocomplete="off">
+      </label>
+      <button class="primary" type="submit">Request pairing</button>
+    </form>
+
+    <section id="pairing" class="pairing-panel" hidden>
+      <p class="eyebrow">PAIRING CHALLENGE</p>
+      <div id="pair-code" class="pair-code" aria-label="Pairing code"></div>
+      <p class="muted">Pairing ID: <code id="pairing-id"></code></p>
+      <p>Approve the six-digit code through authenticated CPTR, then claim the pairing here.</p>
+      <button id="claim-button" class="primary" type="button">Claim pairing</button>
+    </section>
+
+    <footer>
+      <p class="muted">The extension never receives your MCP bearer token. Chrome host permission is requested only for the CPTR origin you enter.</p>
+    </footer>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

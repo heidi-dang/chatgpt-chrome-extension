@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Manifest V3 Chrome device endpoint for secure CPTR Live Computer browser control.",
+  "author": "Heidi Dang (https://github.com/heidi-dang)",
+  "homepage": "https://github.com/heidi-dang/chatgpt-chrome-extension",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/heidi-dang/chatgpt-chrome-extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/heidi-dang/chatgpt-chrome-extension/issues"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",

@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "CPTR Live Computer",
   "version": "0.1.0",
-  "description": "Securely connects your authenticated Chrome tabs to CPTR for ChatGPT Live Computer control.",
+  "description": "Securely connects your authenticated Chrome tabs to CPTR Live Computer by Heidi Dang.",
+  "homepage_url": "https://github.com/heidi-dang/chatgpt-chrome-extension",
   "minimum_chrome_version": "120",
   "permissions": [
     "debugger",
