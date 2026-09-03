@@ -30,6 +30,7 @@ const ALLOWED_CDP_COMMANDS = new Set([
   "Page.stopLoading",
   "Runtime.callFunctionOn",
   "Runtime.enable",
+  "Runtime.evaluate",
 ] as const);
 
 export interface DebuggerApiLike {

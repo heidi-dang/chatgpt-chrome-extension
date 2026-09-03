@@ -3,6 +3,7 @@ import { BrowserInputController } from "../browser/input.js";
 import { HumanInputController } from "../browser/human-input.js";
 import { DomInspectionController, findInSnapshot } from "../browser/dom-inspection.js";
 import { DownloadsController } from "../browser/downloads.js";
+import { EvaluationController } from "../browser/evaluate.js";
 import { NavigationController } from "../browser/navigation.js";
 import { BrowserObservabilityController } from "../browser/observability.js";
 import { PageUtilitiesController } from "../browser/page-utils.js";
@@ -46,6 +47,7 @@ export class BrowserSessionRuntime {
   private readonly humanInput = new HumanInputController(this.debuggerController);
   private readonly domInspection = new DomInspectionController(this.debuggerController, this.refs);
   private readonly downloads = new DownloadsController();
+  private readonly evaluation = new EvaluationController(this.debuggerController);
   private readonly navigation = new NavigationController(this.debuggerController);
   private readonly observability = new BrowserObservabilityController(this.debuggerController);
   private readonly pageUtilities = new PageUtilitiesController(this.debuggerController);
@@ -447,6 +449,12 @@ export class BrowserSessionRuntime {
         return { events: this.observability.listNetwork() };
       case "console":
         return { events: this.observability.listConsole() };
+      case "evaluate":
+        return await this.evaluation.evaluate(
+          tabId,
+          this.requireString(args.expression, "evaluate requires expression"),
+          this.requireString(args.approval_token, "evaluate requires approval_token"),
+        );
       default:
         throw new Error(`Browser action is not implemented by this extension build: ${action}`);
     }
