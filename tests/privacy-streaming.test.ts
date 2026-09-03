@@ -51,10 +51,15 @@ describe("latest-frame-wins streaming", () => {
     expect(frames.waitingCount).toBe(0);
   });
 
-  it("streams zero visual FPS when idle or hidden", () => {
+  it("streams zero visual FPS when observing or hidden", () => {
     const policy = new AdaptiveStreamPolicy();
     expect(policy.target({ mode: "OBSERVING", visible: true, interacting: false, backgrounded: false }).fps).toBe(0);
     expect(policy.target({ mode: "HUMAN_CONTROL", visible: false, interacting: true, backgrounded: false }).fps).toBe(0);
+  });
+
+  it("keeps one visible agent-control frame per second while idle", () => {
+    const policy = new AdaptiveStreamPolicy();
+    expect(policy.target({ mode: "AGENT_CONTROL", visible: true, interacting: false, backgrounded: false }).fps).toBe(1);
   });
 
   it("caps initial human-control visual streaming at 12 FPS", () => {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CPTR Live Computer",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "description": "Securely connects your authenticated Chrome tabs to CPTR Live Computer by Heidi Dang.",
   "homepage_url": "https://github.com/heidi-dang/chatgpt-chrome-extension",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsuGyBMuMNAx6hk1kgvnRGxKWw3AeEhqqTHeBc9Ta+kQHQeOvTqzLJ60EUrt7v+SFY69UsRzLzjdKZUcbXTSuq2JZGw9fyL+uU5uEm1ZY95A5ZP/VjlgnWLYVJ8P639wYxlTIYDATIQj6njLQmZRe7hLGSbtXVtYO8ysHEc7SAZZJEIIfrrBIo1GtHw9DQOtvD3Uvvc0q2dvoxGbTDOT7biFcC6+xP0S4sjfhyFhjG4nwM8hO1IK9m1Igg+SYUpPcpGndJT/vrBqwqGozOkWRiOq5i8Xvoe5ZYzXetxJ757h1VTCPBEN8/nPefSNAnyt5kRAvZeuwhb9bCWRL0m/ifQIDAQAB",

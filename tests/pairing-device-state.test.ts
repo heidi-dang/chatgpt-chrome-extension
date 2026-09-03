@@ -63,6 +63,27 @@ describe("restart-safe browser session state", () => {
     const serialized = JSON.stringify(storage.values);
     expect(serialized).not.toMatch(/credential|cookie|password|text|url|authorization/i);
   });
+
+  it("persists multiple browser sessions independently", async () => {
+    const storage = new MemoryStorage();
+    const repo = new BrowserSessionStateRepository(storage);
+    await repo.save({
+      deviceId: "bdv_1", sessionId: "brs_github", tabId: 7,
+      mode: "AGENT_CONTROL", owner: "agent", epoch: 1, snapshotId: null,
+    });
+    await repo.save({
+      deviceId: "bdv_1", sessionId: "brs_replit", tabId: 8,
+      mode: "AGENT_CONTROL", owner: "agent", epoch: 3, snapshotId: "snap_2",
+    });
+
+    expect(await repo.load("brs_github")).toMatchObject({ sessionId: "brs_github", tabId: 7, epoch: 1 });
+    expect(await repo.load("brs_replit")).toMatchObject({ sessionId: "brs_replit", tabId: 8, epoch: 3 });
+    expect((await repo.loadAll()).map((state) => state.sessionId).sort()).toEqual(["brs_github", "brs_replit"]);
+
+    await repo.clear("brs_github");
+    expect(await repo.load("brs_github")).toBeNull();
+    expect(await repo.load("brs_replit")).toMatchObject({ tabId: 8 });
+  });
 });
 
 describe("secure pairing client", () => {

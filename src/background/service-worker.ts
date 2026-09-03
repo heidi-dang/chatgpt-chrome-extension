@@ -4,12 +4,16 @@ import { chromeSessionStorage, PendingPairingRepository } from "../state/pairing
 import { BrowserSessionStateRepository } from "../state/browser-session-state.js";
 import { DeviceControlTransport } from "../transport/websocket.js";
 import { DeviceVisualTransport } from "../transport/visual-websocket.js";
-import { BrowserSessionRuntime, type BrowserHandoffMessage, type BrowserPrepareReturnMessage } from "./browser-session-runtime.js";
+import type { BrowserHandoffMessage, BrowserPrepareReturnMessage } from "./browser-session-runtime.js";
+import { BrowserSessionRuntimeRegistry } from "./browser-session-registry.js";
 
-const deviceState = new DeviceStateRepository(chromeLocalStorage());
+const localStorage = chromeLocalStorage();
+const deviceState = new DeviceStateRepository(localStorage);
 const sessionStorage = chromeSessionStorage();
 const pairingState = new PendingPairingRepository(sessionStorage);
-const browserSessionState = new BrowserSessionStateRepository(sessionStorage);
+// Browser session/lease metadata contains no credentials and must survive an
+// unpacked-extension reload so attached tabs can be restored after upgrades.
+const browserSessionState = new BrowserSessionStateRepository(localStorage);
 const isHandoffMessage = (message: { type: string }): message is BrowserHandoffMessage =>
   message.type === "browser.handoff.accepted" ||
   message.type === "browser.handoff.returned" ||
@@ -18,12 +22,12 @@ const isPrepareReturnMessage = (message: { type: string }): message is BrowserPr
   message.type === "browser.handoff.prepare_return";
 
 const visualTransport = new DeviceVisualTransport({ stateRepository: deviceState });
-const browserRuntime = new BrowserSessionRuntime(visualTransport, browserSessionState);
+const browserRuntimes = new BrowserSessionRuntimeRegistry(visualTransport, browserSessionState);
 const transport = new DeviceControlTransport({
   stateRepository: deviceState,
   onMessage: (message) => {
     if (message.type === "browser.command") {
-      void browserRuntime.handle(message).then((result) => {
+      void browserRuntimes.handleCommand(message).then((result) => {
         transport.send({
           protocol_version: 1,
           type: result.type,
@@ -41,11 +45,11 @@ const transport = new DeviceControlTransport({
       return;
     }
     if (message.type === "browser.stream.configure") {
-      browserRuntime.configureStream(message);
+      void browserRuntimes.configureStream(message);
       return;
     }
     if (message.type === "browser.human.input") {
-      void browserRuntime.handleHumanInput(message).then((result) => {
+      void browserRuntimes.handleHumanInput(message).then((result) => {
         transport.send({
           protocol_version: 1,
           type: result.type,
@@ -63,7 +67,7 @@ const transport = new DeviceControlTransport({
       return;
     }
     if (isPrepareReturnMessage(message)) {
-      void browserRuntime.prepareReturn(message).then((result) => {
+      void browserRuntimes.prepareReturn(message).then((result) => {
         transport.send({
           protocol_version: 1,
           type: result.type,
@@ -80,12 +84,16 @@ const transport = new DeviceControlTransport({
       });
       return;
     }
-    if (isHandoffMessage(message)) void browserRuntime.syncHandoff(message);
+    if (isHandoffMessage(message)) {
+      void browserRuntimes.syncHandoff(message);
+      return;
+    }
+    if (message.type === "browser.session.stop") void browserRuntimes.stopSession(message.session_id);
   },
 });
 const coordinator = new ExtensionCoordinator({ deviceState, pairingState, transport });
 
-void browserRuntime.restore().finally(() => {
+void browserRuntimes.restoreAll().finally(() => {
   void Promise.all([transport.start(), visualTransport.start()]);
 });
 

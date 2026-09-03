@@ -71,8 +71,8 @@ export class BrowserSessionRuntime {
     this.framePump = new BrowserFramePump(this.screenshots, visualTransport);
   }
 
-  async restore(): Promise<boolean> {
-    const saved = await this.sessionState?.load();
+  async restore(sessionId?: string): Promise<boolean> {
+    const saved = await this.sessionState?.load(sessionId);
     if (!saved) return false;
     try {
       await this.debuggerController.attach(saved.tabId);
@@ -86,7 +86,7 @@ export class BrowserSessionRuntime {
       this.updateFramePump(tab.url, false);
       return true;
     } catch {
-      await this.sessionState?.clear();
+      await this.sessionState?.clear(sessionId ?? saved.sessionId);
       this.stopLocal();
       return false;
     }
@@ -205,7 +205,8 @@ export class BrowserSessionRuntime {
   }
 
   stop(): void {
-    void this.sessionState?.clear();
+    const sessionId = this.sessionId;
+    if (sessionId) void this.sessionState?.clear(sessionId);
     this.stopLocal();
   }
 

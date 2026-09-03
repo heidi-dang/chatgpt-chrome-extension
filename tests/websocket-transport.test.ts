@@ -81,6 +81,30 @@ describe("device control WebSocket", () => {
     transport.stop();
   });
 
+  it("accepts device heartbeats without consuming the replay sequence cursor", async () => {
+    const repo = await configuredRepository();
+    const socket = new FakeSocket();
+    const onMessage = vi.fn();
+    const onError = vi.fn();
+    const transport = new DeviceControlTransport({
+      stateRepository: repo,
+      socketFactory: () => socket,
+      onMessage,
+      onError,
+    });
+
+    await transport.start();
+    socket.open();
+    socket.message(JSON.stringify({ protocol_version: PROTOCOL_VERSION, type: "device.authenticated", device_id: "bdv_1" }));
+    socket.message(JSON.stringify({ protocol_version: PROTOCOL_VERSION, type: "device.ping", device_id: "bdv_1" }));
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect((await repo.load())?.resumeSequence).toBe(830);
+    expect(socket.readyState).toBe(1);
+    transport.stop();
+  });
+
   it("drops duplicate replay events and persists the newest accepted sequence", async () => {
     const repo = await configuredRepository();
     const socket = new FakeSocket();

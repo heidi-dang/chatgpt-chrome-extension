@@ -101,4 +101,22 @@ describe("browser frame pump", () => {
     pump.stop();
     vi.useRealTimers();
   });
+
+  it("emits an idle visible agent-control keepalive frame", async () => {
+    vi.useFakeTimers();
+    const screenshots = { capture: vi.fn(async () => ({ mimeType: "image/jpeg" as const, data: "idle-agent", blocked: false, maskedRegions: 0 })) };
+    const transport = { sendFrame: vi.fn(() => true) };
+    const pump = new BrowserFramePump(screenshots as never, transport as never);
+
+    pump.update({
+      sessionId: "brs_agent", tabId: 8, url: "https://example.com", mode: "AGENT_CONTROL",
+      visible: true, interacting: false, backgrounded: false, viewportWidth: 1200, viewportHeight: 800,
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(screenshots.capture).toHaveBeenCalledTimes(1);
+    expect(transport.sendFrame).toHaveBeenCalledWith(expect.objectContaining({ dataBase64: "idle-agent", sessionId: "brs_agent" }));
+    pump.stop();
+    vi.useRealTimers();
+  });
 });

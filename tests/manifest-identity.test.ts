@@ -17,7 +17,7 @@ describe("release extension identity", () => {
       key?: string;
     };
 
-    expect(manifest.version).toBe("0.1.3");
+    expect(manifest.version).toBe("0.1.5");
     expect(manifest.key).toBeTypeOf("string");
     expect(extensionIdFromPublicKey(manifest.key ?? "")).toBe(expectedExtensionId);
   });

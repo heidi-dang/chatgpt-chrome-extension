@@ -46,7 +46,7 @@ export class AdaptiveStreamPolicy {
     if (context.mode === "AGENT_CONTROL") {
       return context.interacting
         ? { fps: 4, maxWidth: 1_152, quality: 62 }
-        : { fps: 0, maxWidth: 1_024, quality: 58 };
+        : { fps: 1, maxWidth: 1_024, quality: 58 };
     }
     return { fps: 0, maxWidth: 960, quality: 55 };
   }

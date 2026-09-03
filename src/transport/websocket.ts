@@ -29,6 +29,12 @@ const authenticatedSchema = z.object({
   device_id: z.string().min(1).max(200),
 }).loose();
 
+const heartbeatSchema = z.object({
+  protocol_version: z.literal(PROTOCOL_VERSION),
+  type: z.literal("device.ping"),
+  device_id: z.string().min(1).max(200),
+}).strict();
+
 function controlWebSocketUrl(origin: string): string {
   const url = new URL(origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -159,6 +165,11 @@ export class DeviceControlTransport {
         return;
       }
       if (!this.authenticated) throw new Error("Received browser message before device authentication completed");
+      const heartbeat = heartbeatSchema.safeParse(decoded);
+      if (heartbeat.success) {
+        if (heartbeat.data.device_id !== this.deviceState?.deviceId) throw new Error("Device heartbeat targets a different device");
+        return;
+      }
       const message = parseServerMessage(decoded);
       if (message.device_id !== this.deviceState?.deviceId) throw new Error("Browser message targets a different device");
       if (!this.cursor.accept(message.sequence)) return;
