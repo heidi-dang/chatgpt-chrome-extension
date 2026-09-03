@@ -3,6 +3,7 @@ import { BrowserInputController } from "../browser/input.js";
 import { HumanInputController } from "../browser/human-input.js";
 import { DomInspectionController, findInSnapshot } from "../browser/dom-inspection.js";
 import { NavigationController } from "../browser/navigation.js";
+import { PageUtilitiesController } from "../browser/page-utils.js";
 import { ScreenshotController } from "../browser/screenshot.js";
 import { AccessibilitySnapshotController } from "../browser/snapshot.js";
 import { SnapshotRefs } from "../browser/snapshot-refs.js";
@@ -43,6 +44,7 @@ export class BrowserSessionRuntime {
   private readonly humanInput = new HumanInputController(this.debuggerController);
   private readonly domInspection = new DomInspectionController(this.debuggerController, this.refs);
   private readonly navigation = new NavigationController(this.debuggerController);
+  private readonly pageUtilities = new PageUtilitiesController(this.debuggerController);
   private readonly screenshots = new ScreenshotController(
     this.debuggerController,
     new CanvasFrameMasker(),
@@ -364,6 +366,10 @@ export class BrowserSessionRuntime {
         await this.input.fill(tabId, this.requireString(args.ref, "fill requires ref"), this.requireSnapshotId(args), this.requireString(args.text, "fill requires text"));
         this.updateFramePump((await this.tabs.get(tabId)).url, true);
         return { filled: true };
+      case "clear":
+        await this.input.clear(tabId, this.requireString(args.ref, "clear requires ref"), this.requireSnapshotId(args));
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { cleared: true };
       case "press_key":
         await this.input.pressKey(tabId, this.requireString(args.key, "press_key requires key"), typeof args.code === "string" ? args.code : undefined);
         this.updateFramePump((await this.tabs.get(tabId)).url, true);
@@ -396,6 +402,15 @@ export class BrowserSessionRuntime {
       case "focus":
         await this.input.focus(tabId, this.requireString(args.ref, "focus requires ref"), this.requireSnapshotId(args));
         return { focused: true };
+      case "handle_dialog":
+        await this.pageUtilities.handleDialog(
+          tabId,
+          args.accept === undefined ? true : Boolean(args.accept),
+          typeof args.prompt_text === "string" ? args.prompt_text : undefined,
+        );
+        return { handled: true };
+      case "print_pdf":
+        return await this.pageUtilities.printPdf(tabId, Boolean(args.landscape));
       default:
         throw new Error(`Browser action is not implemented by this extension build: ${action}`);
     }

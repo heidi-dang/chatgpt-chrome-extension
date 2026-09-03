@@ -3,6 +3,7 @@ import { AccessibilitySnapshotController } from "../src/browser/snapshot.js";
 import { BrowserInputController } from "../src/browser/input.js";
 import { DomInspectionController, findInSnapshot } from "../src/browser/dom-inspection.js";
 import { NavigationController } from "../src/browser/navigation.js";
+import { PageUtilitiesController } from "../src/browser/page-utils.js";
 import { SnapshotRefs } from "../src/browser/snapshot-refs.js";
 
 type CdpCall = { tabId: number; method: string; params: object };
@@ -28,6 +29,9 @@ class FakeCdp {
     }
     if (method === "DOM.describeNode") {
       return { node: { nodeValue: "Visible text Bearer abc.def", attributes: ["aria-label", "Email", "value", "hunter2", "data-token", "secret"] } };
+    }
+    if (method === "Page.printToPDF") {
+      return { data: "pdf-base64" };
     }
     if (method === "Page.getNavigationHistory") {
       return {
@@ -127,12 +131,13 @@ describe("ref-based input", () => {
     });
   });
 
-  it("fills a ref using focus + key events + insertText instead of arbitrary page evaluation", async () => {
+  it("clears and fills a ref using focus + key events instead of arbitrary page evaluation", async () => {
     const cdp = new FakeCdp();
     const refs = new SnapshotRefs();
     refs.replace("snap_1", new Map([["ref_18", { backendNodeId: 18 }]]));
     const input = new BrowserInputController(cdp, refs);
 
+    await input.clear(7, "ref_18", "snap_1");
     await input.fill(7, "ref_18", "snap_1", "hello");
 
     expect(cdp.calls.map((call) => call.method)).toEqual([
@@ -141,9 +146,32 @@ describe("ref-based input", () => {
       "Input.dispatchKeyEvent",
       "Input.dispatchKeyEvent",
       "Input.dispatchKeyEvent",
+      "DOM.focus",
+      "Input.dispatchKeyEvent",
+      "Input.dispatchKeyEvent",
+      "Input.dispatchKeyEvent",
+      "Input.dispatchKeyEvent",
       "Input.insertText",
     ]);
     expect(cdp.calls.at(-1)?.params).toEqual({ text: "hello" });
+  });
+});
+
+describe("page utilities", () => {
+  it("handles dialogs and returns bounded PDF data through allowlisted CDP", async () => {
+    const cdp = new FakeCdp();
+    const page = new PageUtilitiesController(cdp);
+
+    await page.handleDialog(7, false, "cancelled");
+    const pdf = await page.printPdf(7, true);
+
+    expect(cdp.calls[0]).toEqual({ tabId: 7, method: "Page.handleJavaScriptDialog", params: { accept: false, promptText: "cancelled" } });
+    expect(cdp.calls[1]).toEqual({
+      tabId: 7,
+      method: "Page.printToPDF",
+      params: { landscape: true, printBackground: true, preferCSSPageSize: true, transferMode: "ReturnAsBase64" },
+    });
+    expect(pdf).toEqual({ data: "pdf-base64", truncated: false });
   });
 });
 

@@ -43,12 +43,16 @@ export class BrowserInputController {
   }
 
   async fill(tabId: number, ref: string, snapshotId: string, text: string): Promise<void> {
+    await this.clear(tabId, ref, snapshotId);
+    await this.cdp.send(tabId, "Input.insertText", { text });
+  }
+
+  async clear(tabId: number, ref: string, snapshotId: string): Promise<void> {
     await this.focus(tabId, ref, snapshotId);
     await this.dispatchKey(tabId, "rawKeyDown", "a", "KeyA", 2);
     await this.dispatchKey(tabId, "keyUp", "a", "KeyA", 2);
     await this.dispatchKey(tabId, "rawKeyDown", "Backspace", "Backspace", 0);
     await this.dispatchKey(tabId, "keyUp", "Backspace", "Backspace", 0);
-    await this.cdp.send(tabId, "Input.insertText", { text });
   }
 
   async type(tabId: number, ref: string, snapshotId: string, text: string): Promise<void> {
