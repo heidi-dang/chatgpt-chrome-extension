@@ -91,6 +91,16 @@ export class BrowserSessionRuntime {
     }
   }
 
+  configureStream(message: Extract<ServerMessage, { type: "browser.stream.configure" }>): void {
+    if (!this.sessionId || message.session_id !== this.sessionId) return;
+    this.framePump.configure({
+      visible: message.payload.visible,
+      maxFps: message.payload.max_fps,
+      maxWidth: message.payload.max_width,
+      quality: message.payload.quality,
+    });
+  }
+
   async prepareReturn(message: BrowserPrepareReturnMessage): Promise<RuntimeResult> {
     try {
       if (!this.sessionId || message.session_id !== this.sessionId) throw new Error("Browser session does not match the active tab");

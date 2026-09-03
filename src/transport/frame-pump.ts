@@ -3,6 +3,13 @@ import type { BrowserMode } from "./protocol.js";
 import { AdaptiveStreamPolicy, LatestFrameSlot } from "./visual-stream.js";
 import type { DeviceVisualTransport, VisualFrameEnvelope } from "./visual-websocket.js";
 
+export type StreamOverride = {
+  visible: boolean;
+  maxFps: number;
+  maxWidth: number;
+  quality: number;
+};
+
 export type FramePumpContext = {
   sessionId: string;
   tabId: number;
@@ -21,6 +28,7 @@ export class BrowserFramePump {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private context: FramePumpContext | null = null;
+  private streamOverride: StreamOverride | null = null;
 
   constructor(
     private readonly screenshots: ScreenshotController,
@@ -30,6 +38,21 @@ export class BrowserFramePump {
   update(context: FramePumpContext | null): void {
     this.context = context;
     if (!context) {
+      this.stopTimer();
+      this.latest.clear();
+      return;
+    }
+    if (this.effectiveTarget(context).fps <= 0) {
+      this.stopTimer();
+      return;
+    }
+    this.schedule(0);
+  }
+
+  configure(override: StreamOverride | null): void {
+    this.streamOverride = override;
+    const context = this.context;
+    if (!context || this.effectiveTarget(context).fps <= 0) {
       this.stopTimer();
       this.latest.clear();
       return;
@@ -54,7 +77,7 @@ export class BrowserFramePump {
   private async tick(): Promise<void> {
     const context = this.context;
     if (!context || this.running) return;
-    const target = this.policy.target(context);
+    const target = this.effectiveTarget(context);
     if (target.fps <= 0) return;
     this.running = true;
     const startedAt = Date.now();
@@ -81,7 +104,7 @@ export class BrowserFramePump {
       this.running = false;
       const active = this.context;
       if (active) {
-        const nextTarget = this.policy.target(active);
+        const nextTarget = this.effectiveTarget(active);
         if (nextTarget.fps > 0) {
           const elapsed = Date.now() - startedAt;
           const interval = Math.max(1, Math.floor(1000 / nextTarget.fps));
@@ -89,6 +112,19 @@ export class BrowserFramePump {
         }
       }
     }
+  }
+
+  private effectiveTarget(context: FramePumpContext) {
+    const target = this.policy.target(context);
+    const override = this.streamOverride;
+    if (!override || !override.visible) {
+      return override ? { ...target, fps: 0 } : target;
+    }
+    return {
+      fps: Math.min(target.fps, override.maxFps),
+      maxWidth: Math.min(target.maxWidth, override.maxWidth),
+      quality: Math.min(target.quality, override.quality),
+    };
   }
 
   private stopTimer(): void {

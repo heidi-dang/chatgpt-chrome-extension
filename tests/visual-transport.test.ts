@@ -89,6 +89,15 @@ describe("browser frame pump", () => {
     await vi.runOnlyPendingTimersAsync();
     expect(screenshots.capture).toHaveBeenCalledTimes(1);
     expect(transport.sendFrame).toHaveBeenCalledWith(expect.objectContaining({ dataBase64: "masked", sessionId: "brs_1" }));
+
+    pump.configure({ visible: false, maxFps: 0, maxWidth: 960, quality: 55 });
+    await vi.runOnlyPendingTimersAsync();
+    expect(screenshots.capture).toHaveBeenCalledTimes(1);
+
+    pump.configure({ visible: true, maxFps: 10, maxWidth: 1280, quality: 68 });
+    await vi.runOnlyPendingTimersAsync();
+    expect(screenshots.capture).toHaveBeenCalledTimes(2);
+
     pump.stop();
     vi.useRealTimers();
   });

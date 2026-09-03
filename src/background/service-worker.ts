@@ -37,6 +37,10 @@ const transport = new DeviceControlTransport({
       });
       return;
     }
+    if (message.type === "browser.stream.configure") {
+      browserRuntime.configureStream(message);
+      return;
+    }
     if (message.type === "browser.human.input") {
       void browserRuntime.handleHumanInput(message).then((result) => {
         transport.send({
