@@ -74,6 +74,9 @@ export class BrowserFramePump {
         const newest = this.latest.take();
         if (newest) this.transport.sendFrame(newest);
       }
+    } catch {
+      // Visual capture is best-effort. Control traffic and lease ownership must
+      // remain healthy when Chrome temporarily cannot produce a screenshot.
     } finally {
       this.running = false;
       const active = this.context;

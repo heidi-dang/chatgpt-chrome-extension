@@ -1,5 +1,6 @@
 import { DebuggerController } from "../browser/debugger.js";
 import { BrowserInputController } from "../browser/input.js";
+import { HumanInputController } from "../browser/human-input.js";
 import { NavigationController } from "../browser/navigation.js";
 import { ScreenshotController } from "../browser/screenshot.js";
 import { AccessibilitySnapshotController } from "../browser/snapshot.js";
@@ -8,7 +9,7 @@ import { TabsController } from "../browser/tabs.js";
 import { CanvasFrameMasker, PrivacyCurtainPolicy } from "../privacy/masking.js";
 import { BrowserLease } from "../sessions/leases.js";
 import { BoundedCommandDedupe } from "../transport/idempotency.js";
-import type { BrowserCommandMessage, BrowserMode } from "../transport/protocol.js";
+import type { BrowserCommandMessage, BrowserMode, HumanInputMessage, ServerMessage } from "../transport/protocol.js";
 import { BrowserFramePump } from "../transport/frame-pump.js";
 import type { DeviceVisualTransport } from "../transport/visual-websocket.js";
 
@@ -18,12 +19,18 @@ export type RuntimeResult = {
   payload: Record<string, unknown>;
 };
 
+export type BrowserHandoffMessage = ServerMessage & {
+  type: "browser.handoff.accepted" | "browser.handoff.returned" | "browser.handoff.cancelled";
+  payload: Record<string, unknown>;
+};
+
 export class BrowserSessionRuntime {
   private readonly debuggerController = new DebuggerController();
   private readonly tabs = new TabsController();
   private readonly refs = new SnapshotRefs();
   private readonly snapshots = new AccessibilitySnapshotController(this.debuggerController, this.refs);
   private readonly input = new BrowserInputController(this.debuggerController, this.refs);
+  private readonly humanInput = new HumanInputController(this.debuggerController);
   private readonly navigation = new NavigationController(this.debuggerController);
   private readonly screenshots = new ScreenshotController(
     this.debuggerController,
@@ -59,6 +66,53 @@ export class BrowserSessionRuntime {
         payload: { error: error instanceof Error ? error.message : "Browser command failed" },
       };
     }
+  }
+
+  async handleHumanInput(message: HumanInputMessage): Promise<RuntimeResult> {
+    try {
+      const tabId = this.requireTab();
+      const lease = this.requireLease();
+      const audit = await this.humanInput.handle(tabId, lease, message);
+      this.mode = "HUMAN_CONTROL";
+      this.updateFramePump((await this.tabs.get(tabId)).url, true);
+      return { type: "browser.command.completed", commandId: message.command_id, payload: audit };
+    } catch (error) {
+      return {
+        type: "browser.command.failed",
+        commandId: message.command_id,
+        payload: { error: error instanceof Error ? error.message : "Human browser input failed" },
+      };
+    }
+  }
+
+  async syncHandoff(message: BrowserHandoffMessage): Promise<void> {
+    if (!this.lease || !this.sessionId || message.session_id !== this.sessionId) return;
+    const payload = message.payload;
+    const owner = payload.owner;
+    const epoch = payload.epoch;
+    if (typeof owner !== "string" || typeof epoch !== "number" || !Number.isInteger(epoch) || epoch < 0) {
+      throw new Error("Invalid browser handoff payload");
+    }
+    const current = this.lease.snapshot();
+    if (epoch <= current.epoch) return;
+    if (owner === "human") {
+      if (current.owner !== "agent" || epoch !== current.epoch + 1) throw new Error("Unexpected human handoff epoch");
+      this.lease.transferToHuman(current.epoch);
+      this.mode = "HUMAN_CONTROL";
+    } else if (owner === "agent") {
+      const snapshotId = typeof payload.snapshot_id === "string" ? payload.snapshot_id : "";
+      if (current.owner !== "human" || epoch !== current.epoch + 1 || !snapshotId) throw new Error("Unexpected agent return epoch");
+      this.lease.returnToAgent(current.epoch, snapshotId);
+      this.refs.invalidate();
+      this.mode = "AGENT_CONTROL";
+    } else if (owner === "none") {
+      this.stop();
+      return;
+    } else {
+      throw new Error("Unsupported browser handoff owner");
+    }
+    const tabId = this.requireTab();
+    this.updateFramePump((await this.tabs.get(tabId)).url, false);
   }
 
   stop(): void {

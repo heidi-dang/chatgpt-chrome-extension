@@ -3,31 +3,57 @@ import { chromeLocalStorage, DeviceStateRepository } from "../state/device-state
 import { chromeSessionStorage, PendingPairingRepository } from "../state/pairing-state.js";
 import { DeviceControlTransport } from "../transport/websocket.js";
 import { DeviceVisualTransport } from "../transport/visual-websocket.js";
-import { BrowserSessionRuntime } from "./browser-session-runtime.js";
+import { BrowserSessionRuntime, type BrowserHandoffMessage } from "./browser-session-runtime.js";
 
 const deviceState = new DeviceStateRepository(chromeLocalStorage());
 const pairingState = new PendingPairingRepository(chromeSessionStorage());
+const isHandoffMessage = (message: { type: string }): message is BrowserHandoffMessage =>
+  message.type === "browser.handoff.accepted" ||
+  message.type === "browser.handoff.returned" ||
+  message.type === "browser.handoff.cancelled";
+
 const visualTransport = new DeviceVisualTransport({ stateRepository: deviceState });
 const browserRuntime = new BrowserSessionRuntime(visualTransport);
 const transport = new DeviceControlTransport({
   stateRepository: deviceState,
   onMessage: (message) => {
-    if (message.type !== "browser.command") return;
-    void browserRuntime.handle(message).then((result) => {
-      transport.send({
-        protocol_version: 1,
-        type: result.type,
-        device_id: message.device_id,
-        session_id: message.session_id,
-        surface_id: message.surface_id,
-        sequence: message.sequence,
-        timestamp: new Date().toISOString(),
-        source: "extension",
-        mode: message.mode,
-        command_id: result.commandId,
-        payload: result.payload,
+    if (message.type === "browser.command") {
+      void browserRuntime.handle(message).then((result) => {
+        transport.send({
+          protocol_version: 1,
+          type: result.type,
+          device_id: message.device_id,
+          session_id: message.session_id,
+          surface_id: message.surface_id,
+          sequence: message.sequence,
+          timestamp: new Date().toISOString(),
+          source: "extension",
+          mode: message.mode,
+          command_id: result.commandId,
+          payload: result.payload,
+        });
       });
-    });
+      return;
+    }
+    if (message.type === "browser.human.input") {
+      void browserRuntime.handleHumanInput(message).then((result) => {
+        transport.send({
+          protocol_version: 1,
+          type: result.type,
+          device_id: message.device_id,
+          session_id: message.session_id,
+          surface_id: message.surface_id,
+          sequence: message.sequence,
+          timestamp: new Date().toISOString(),
+          source: "extension",
+          mode: "HUMAN_CONTROL",
+          command_id: result.commandId,
+          payload: result.payload,
+        });
+      });
+      return;
+    }
+    if (isHandoffMessage(message)) void browserRuntime.syncHandoff(message);
   },
 });
 const coordinator = new ExtensionCoordinator({ deviceState, pairingState, transport });
