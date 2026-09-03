@@ -53,9 +53,14 @@ async function parseJson<T>(response: Response, schema: z.ZodType<T>): Promise<T
 
 export class PairingClient {
   private readonly origin: string;
+  private readonly fetcher: typeof fetch;
 
-  constructor(origin: string, private readonly fetcher: typeof fetch = fetch) {
+  constructor(origin: string, fetcher?: typeof fetch) {
     this.origin = normalizeCptrOrigin(origin);
+    // WorkerGlobalScope.fetch is a Web IDL method that requires its global receiver.
+    // Binding here keeps injected test fetchers unchanged while making the default
+    // safe when called later from PairingClient methods in an MV3 service worker.
+    this.fetcher = fetcher ?? globalThis.fetch.bind(globalThis);
   }
 
   async request(deviceName: string): Promise<PairingRequest> {

@@ -66,6 +66,28 @@ describe("restart-safe browser session state", () => {
 });
 
 describe("secure pairing client", () => {
+  it("binds the default WorkerGlobalScope fetch receiver", async () => {
+    const originalFetch = globalThis.fetch;
+    const receiver = globalThis;
+    const calls: unknown[] = [];
+    globalThis.fetch = function (this: typeof globalThis): Promise<Response> {
+      calls.push(this);
+      return Promise.resolve(new Response(JSON.stringify({
+        pairing_id: "pair_bound",
+        code: "654321",
+        claim_secret: "claim-secret-0123456789abcdef0123456789abcdef",
+        expires_at: 2_000_000_000_000,
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    };
+    try {
+      const client = new PairingClient("https://cptr.example.com");
+      await client.request("Heidi Chrome");
+      expect(calls).toEqual([receiver]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("requires HTTPS except explicit loopback development origins", () => {
     expect(normalizeCptrOrigin("https://cptr.example.com/path")).toBe("https://cptr.example.com");
     expect(normalizeCptrOrigin("http://127.0.0.1:8000")).toBe("http://127.0.0.1:8000");
