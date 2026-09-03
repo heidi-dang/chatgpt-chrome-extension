@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "CPTR Live Computer",
+  "version": "0.1.0",
+  "description": "Securely connects your authenticated Chrome tabs to CPTR for ChatGPT Live Computer control.",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "debugger",
+    "downloads",
+    "storage",
+    "tabs"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "CPTR Live Computer",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

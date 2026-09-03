@@ -1,0 +1,71 @@
+import { describe, expect, it, vi } from "vitest";
+import { DeviceStateRepository, type StorageAreaLike } from "../src/state/device-state.js";
+import { PairingClient, normalizeCptrOrigin } from "../src/transport/pairing.js";
+
+class MemoryStorage implements StorageAreaLike {
+  readonly values: Record<string, unknown> = {};
+
+  async get(key: string): Promise<Record<string, unknown>> {
+    return { [key]: this.values[key] };
+  }
+
+  async set(items: Record<string, unknown>): Promise<void> {
+    Object.assign(this.values, items);
+  }
+
+  async remove(key: string): Promise<void> {
+    delete this.values[key];
+  }
+}
+
+describe("device credential state", () => {
+  it("persists only the device-scoped credential and reconnect cursor", async () => {
+    const storage = new MemoryStorage();
+    const repo = new DeviceStateRepository(storage);
+    await repo.save({
+      cptrOrigin: "https://cptr.example.com",
+      deviceId: "bdv_1",
+      deviceCredential: "device-secret-0123456789abcdef0123456789abcdef",
+      deviceName: "Heidi Chrome",
+      resumeSequence: 830,
+    });
+
+    expect(await repo.load()).toMatchObject({ deviceId: "bdv_1", deviceCredential: "device-secret-0123456789abcdef0123456789abcdef", resumeSequence: 830 });
+    expect(JSON.stringify(storage.values)).not.toContain("mcp_token");
+    expect(JSON.stringify(storage.values)).not.toContain("bearer_token");
+  });
+});
+
+describe("secure pairing client", () => {
+  it("requires HTTPS except explicit loopback development origins", () => {
+    expect(normalizeCptrOrigin("https://cptr.example.com/path")).toBe("https://cptr.example.com");
+    expect(normalizeCptrOrigin("http://127.0.0.1:8000")).toBe("http://127.0.0.1:8000");
+    expect(() => normalizeCptrOrigin("http://cptr.example.com")).toThrow(/https/i);
+    expect(() => normalizeCptrOrigin("https://user:pass@cptr.example.com")).toThrow(/credentials/i);
+  });
+
+  it("keeps the claim secret out of URLs and returns a device credential once approved", async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        pairing_id: "pair_1",
+        code: "123456",
+        claim_secret: "claim-secret-0123456789abcdef0123456789abcdef",
+        expires_at: 2_000_000_000_000,
+      }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: "claimed",
+        device_id: "bdv_1",
+        device_credential: "device-secret-0123456789abcdef0123456789abcdef",
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = new PairingClient("https://cptr.example.com", fetcher);
+
+    const pairing = await client.request("Heidi Chrome");
+    const claimed = await client.claim(pairing.pairingId, pairing.claimSecret);
+
+    expect(claimed.deviceId).toBe("bdv_1");
+    const claimUrl = String(fetcher.mock.calls[1]?.[0]);
+    expect(claimUrl).not.toContain("claim-secret-0123456789abcdef0123456789abcdef");
+    const claimBody = String(fetcher.mock.calls[1]?.[1]?.body);
+    expect(claimBody).toContain("claim-secret-0123456789abcdef0123456789abcdef");
+  });
+});
