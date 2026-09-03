@@ -207,6 +207,20 @@ export class BrowserSessionRuntime {
         return { tab: await this.tabs.activate(this.requireInt(args.tab_id, "activate_tab requires tab_id")) };
       case "list_tabs":
         return { tabs: await this.tabs.list() };
+      case "open_tab": {
+        const url = typeof args.url === "string" && args.url ? args.url : undefined;
+        return { tab: await this.tabs.open(url) };
+      }
+      case "close_tab": {
+        const targetTabId = args.tab_id === undefined ? tabId : this.requireInt(args.tab_id, "close_tab requires tab_id");
+        await this.tabs.close(targetTabId);
+        if (targetTabId === tabId) this.stop();
+        return { closed: true, tab_id: targetTabId };
+      }
+      case "duplicate_tab": {
+        const targetTabId = args.tab_id === undefined ? tabId : this.requireInt(args.tab_id, "duplicate_tab requires tab_id");
+        return { tab: await this.tabs.duplicate(targetTabId) };
+      }
       case "navigate": {
         const url = this.requireString(args.url, "navigate requires url");
         const result = await this.navigation.navigate(tabId, url);
@@ -266,9 +280,17 @@ export class BrowserSessionRuntime {
         this.updateFramePump((await this.tabs.get(tabId)).url, true);
         return { filled: true };
       case "press_key":
-        await this.input.pressKey(tabId, this.requireString(args.key, "press_key requires key"));
+        await this.input.pressKey(tabId, this.requireString(args.key, "press_key requires key"), typeof args.code === "string" ? args.code : undefined);
         this.updateFramePump((await this.tabs.get(tabId)).url, true);
         return { pressed: true };
+      case "key_down":
+        await this.input.keyDown(tabId, this.requireString(args.key, "key_down requires key"), typeof args.code === "string" ? args.code : undefined);
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { key_down: true };
+      case "key_up":
+        await this.input.keyUp(tabId, this.requireString(args.key, "key_up requires key"), typeof args.code === "string" ? args.code : undefined);
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { key_up: true };
       case "scroll":
         await this.input.scroll(
           tabId,
@@ -277,6 +299,15 @@ export class BrowserSessionRuntime {
         );
         this.updateFramePump((await this.tabs.get(tabId)).url, true);
         return { scrolled: true };
+      case "drag":
+        await this.input.drag(
+          tabId,
+          this.requireString(args.source_ref, "drag requires source_ref"),
+          this.requireString(args.target_ref, "drag requires target_ref"),
+          this.requireSnapshotId(args),
+        );
+        this.updateFramePump((await this.tabs.get(tabId)).url, true);
+        return { dragged: true };
       case "focus":
         await this.input.focus(tabId, this.requireString(args.ref, "focus requires ref"), this.requireSnapshotId(args));
         return { focused: true };

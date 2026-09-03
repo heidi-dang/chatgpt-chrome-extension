@@ -49,6 +49,30 @@ describe("accessibility-first perception", () => {
 });
 
 describe("ref-based input", () => {
+  it("supports bounded key down/up and ref-to-ref drag without arbitrary evaluation", async () => {
+    const cdp = new FakeCdp();
+    const refs = new SnapshotRefs();
+    refs.replace("snap_1", new Map([
+      ["ref_source", { backendNodeId: 18 }],
+      ["ref_target", { backendNodeId: 20 }],
+    ]));
+    const input = new BrowserInputController(cdp, refs);
+
+    await input.keyDown(7, "Shift", "ShiftLeft");
+    await input.keyUp(7, "Shift", "ShiftLeft");
+    await input.drag(7, "ref_source", "ref_target", "snap_1");
+
+    expect(cdp.calls[0]).toEqual({ tabId: 7, method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", key: "Shift", code: "ShiftLeft", modifiers: 0 } });
+    expect(cdp.calls[1]).toEqual({ tabId: 7, method: "Input.dispatchKeyEvent", params: { type: "keyUp", key: "Shift", code: "ShiftLeft", modifiers: 0 } });
+    expect(cdp.calls.filter((call) => call.method === "DOM.getBoxModel")).toHaveLength(2);
+    expect(cdp.calls.filter((call) => call.method === "Input.dispatchMouseEvent").map((call) => call.params)).toEqual([
+      { type: "mouseMoved", x: 60, y: 40, button: "none" },
+      { type: "mousePressed", x: 60, y: 40, button: "left", clickCount: 1 },
+      { type: "mouseMoved", x: 60, y: 40, button: "left", buttons: 1 },
+      { type: "mouseReleased", x: 60, y: 40, button: "left", clickCount: 1 },
+    ]);
+  });
+
   it("clicks the center of the referenced DOM box without screenshot coordinates", async () => {
     const cdp = new FakeCdp();
     const refs = new SnapshotRefs();

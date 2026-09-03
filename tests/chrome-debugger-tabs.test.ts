@@ -71,6 +71,12 @@ describe("tab API boundary", () => {
     }]);
     await tabs.activate(4);
     expect(api.update).toHaveBeenCalledWith(4, { active: true });
+    expect((await tabs.open("https://example.com/new")).id).toBe(5);
+    expect(api.create).toHaveBeenCalledWith({ url: "https://example.com/new", active: true });
+    expect((await tabs.duplicate(4)).id).toBe(5);
+    expect(api.duplicate).toHaveBeenCalledWith(4);
+    await tabs.close(4);
+    expect(api.remove).toHaveBeenCalledWith(4);
   });
 
   it("rejects tabs without stable numeric ids", async () => {
