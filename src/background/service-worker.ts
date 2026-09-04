@@ -2,8 +2,9 @@ import { ExtensionCoordinator } from "./coordinator.js";
 import { chromeLocalStorage, DeviceStateRepository } from "../state/device-state.js";
 import { chromeSessionStorage, PendingPairingRepository } from "../state/pairing-state.js";
 import { BrowserSessionStateRepository } from "../state/browser-session-state.js";
-import { DeviceControlTransport } from "../transport/websocket.js";
+import { DeviceControlTransport, type DeviceConnectionState } from "../transport/websocket.js";
 import { DeviceVisualTransport } from "../transport/visual-websocket.js";
+import { PROTOCOL_VERSION } from "../transport/protocol.js";
 import type { BrowserHandoffMessage, BrowserPrepareReturnMessage } from "./browser-session-runtime.js";
 import { BrowserSessionRuntimeRegistry } from "./browser-session-registry.js";
 
@@ -21,81 +22,120 @@ const isHandoffMessage = (message: { type: string }): message is BrowserHandoffM
 const isPrepareReturnMessage = (message: { type: string }): message is BrowserPrepareReturnMessage =>
   message.type === "browser.handoff.prepare_return";
 
-const visualTransport = new DeviceVisualTransport({ stateRepository: deviceState });
+function diagnosticError(scope: string, error: unknown): void {
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  console.error(`[CPTR] ${scope}: ${normalized.name}: ${normalized.message.slice(0, 500)}`);
+}
+
+function diagnosticState(state: DeviceConnectionState): void {
+  console.info(`[CPTR] control transport state=${state}`);
+}
+
+const visualTransport = new DeviceVisualTransport({
+  stateRepository: deviceState,
+  onError: (error) => diagnosticError("visual transport", error),
+});
 const browserRuntimes = new BrowserSessionRuntimeRegistry(visualTransport, browserSessionState);
 const transport = new DeviceControlTransport({
   stateRepository: deviceState,
+  onError: (error) => diagnosticError("control transport", error),
+  onState: diagnosticState,
   onMessage: (message) => {
     if (message.type === "browser.command") {
-      void browserRuntimes.handleCommand(message).then((result) => {
-        transport.send({
-          protocol_version: 1,
-          type: result.type,
-          device_id: message.device_id,
-          session_id: message.session_id,
-          surface_id: message.surface_id,
-          sequence: message.sequence,
-          timestamp: new Date().toISOString(),
-          source: "extension",
-          mode: message.mode,
-          command_id: result.commandId,
-          payload: result.payload,
+      void browserRuntimes.handleCommand(message)
+        .then((result) => {
+          transport.send({
+            protocol_version: PROTOCOL_VERSION,
+            type: result.type,
+            device_id: message.device_id,
+            session_id: message.session_id,
+            surface_id: message.surface_id,
+            sequence: message.sequence,
+            timestamp: new Date().toISOString(),
+            source: "extension",
+            mode: message.mode,
+            command_id: result.commandId,
+            payload: result.payload,
+          });
+        })
+        .catch((error: unknown) => {
+          diagnosticError("browser command dispatch", error);
+          transport.send({
+            protocol_version: PROTOCOL_VERSION,
+            type: "browser.command.failed",
+            device_id: message.device_id,
+            session_id: message.session_id,
+            surface_id: message.surface_id,
+            sequence: message.sequence,
+            timestamp: new Date().toISOString(),
+            source: "extension",
+            mode: message.mode,
+            command_id: message.command_id,
+            payload: { error: "Browser command dispatch failed", code: "extension_dispatch_error", retriable: false },
+          });
         });
-      });
       return;
     }
     if (message.type === "browser.stream.configure") {
-      void browserRuntimes.configureStream(message);
+      void browserRuntimes.configureStream(message).catch((error: unknown) => diagnosticError("stream configuration", error));
       return;
     }
     if (message.type === "browser.human.input") {
-      void browserRuntimes.handleHumanInput(message).then((result) => {
-        transport.send({
-          protocol_version: 1,
-          type: result.type,
-          device_id: message.device_id,
-          session_id: message.session_id,
-          surface_id: message.surface_id,
-          sequence: message.sequence,
-          timestamp: new Date().toISOString(),
-          source: "extension",
-          mode: "HUMAN_CONTROL",
-          command_id: result.commandId,
-          payload: result.payload,
-        });
-      });
+      void browserRuntimes.handleHumanInput(message)
+        .then((result) => {
+          transport.send({
+            protocol_version: PROTOCOL_VERSION,
+            type: result.type,
+            device_id: message.device_id,
+            session_id: message.session_id,
+            surface_id: message.surface_id,
+            sequence: message.sequence,
+            timestamp: new Date().toISOString(),
+            source: "extension",
+            mode: "HUMAN_CONTROL",
+            command_id: result.commandId,
+            payload: result.payload,
+          });
+        })
+        .catch((error: unknown) => diagnosticError("human input dispatch", error));
       return;
     }
     if (isPrepareReturnMessage(message)) {
-      void browserRuntimes.prepareReturn(message).then((result) => {
-        transport.send({
-          protocol_version: 1,
-          type: result.type,
-          device_id: message.device_id,
-          session_id: message.session_id,
-          surface_id: message.surface_id,
-          sequence: message.sequence,
-          timestamp: new Date().toISOString(),
-          source: "extension",
-          mode: "HUMAN_CONTROL",
-          command_id: result.commandId,
-          payload: result.payload,
-        });
-      });
+      void browserRuntimes.prepareReturn(message)
+        .then((result) => {
+          transport.send({
+            protocol_version: PROTOCOL_VERSION,
+            type: result.type,
+            device_id: message.device_id,
+            session_id: message.session_id,
+            surface_id: message.surface_id,
+            sequence: message.sequence,
+            timestamp: new Date().toISOString(),
+            source: "extension",
+            mode: "HUMAN_CONTROL",
+            command_id: result.commandId,
+            payload: result.payload,
+          });
+        })
+        .catch((error: unknown) => diagnosticError("handoff preparation", error));
       return;
     }
     if (isHandoffMessage(message)) {
-      void browserRuntimes.syncHandoff(message);
+      void browserRuntimes.syncHandoff(message).catch((error: unknown) => diagnosticError("handoff synchronization", error));
       return;
     }
-    if (message.type === "browser.session.stop") void browserRuntimes.stopSession(message.session_id);
+    if (message.type === "browser.session.stop") {
+      void browserRuntimes.stopSession(message.session_id).catch((error: unknown) => diagnosticError("session stop", error));
+    }
   },
 });
 const coordinator = new ExtensionCoordinator({ deviceState, pairingState, transport });
 
-void browserRuntimes.restoreAll().finally(() => {
-  void Promise.all([transport.start(), visualTransport.start()]);
-});
+void browserRuntimes.restoreAll()
+  .catch((error: unknown) => diagnosticError("session restore", error))
+  .finally(() => {
+    void Promise.all([transport.start(), visualTransport.start()]).catch((error: unknown) => diagnosticError("transport startup", error));
+  });
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.runtime.openOptionsPage();

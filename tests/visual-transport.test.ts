@@ -77,14 +77,14 @@ describe("browser frame pump", () => {
 
     pump.update({
       sessionId: "brs_1", tabId: 7, url: "https://example.com", mode: "HUMAN_CONTROL",
-      visible: false, interacting: true, backgrounded: false, viewportWidth: 1200, viewportHeight: 800,
+      visible: false, interacting: true, backgrounded: false,
     });
     await vi.runOnlyPendingTimersAsync();
     expect(screenshots.capture).not.toHaveBeenCalled();
 
     pump.update({
       sessionId: "brs_1", tabId: 7, url: "https://example.com", mode: "HUMAN_CONTROL",
-      visible: true, interacting: true, backgrounded: false, viewportWidth: 1200, viewportHeight: 800,
+      visible: true, interacting: true, backgrounded: false,
     });
     await vi.runOnlyPendingTimersAsync();
     expect(screenshots.capture).toHaveBeenCalledTimes(1);
@@ -110,7 +110,7 @@ describe("browser frame pump", () => {
 
     pump.update({
       sessionId: "brs_agent", tabId: 8, url: "https://example.com", mode: "AGENT_CONTROL",
-      visible: true, interacting: false, backgrounded: false, viewportWidth: 1200, viewportHeight: 800,
+      visible: true, interacting: false, backgrounded: false,
     });
     await vi.runOnlyPendingTimersAsync();
 

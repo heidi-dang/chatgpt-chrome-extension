@@ -95,7 +95,6 @@ describe("secure pairing client", () => {
       calls.push(this);
       return Promise.resolve(new Response(JSON.stringify({
         pairing_id: "pair_bound",
-        code: "654321",
         claim_secret: "claim-secret-0123456789abcdef0123456789abcdef",
         expires_at: 2_000_000_000_000,
       }), { status: 200, headers: { "content-type": "application/json" } }));
@@ -120,7 +119,6 @@ describe("secure pairing client", () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({
         pairing_id: "pair_1",
-        code: "123456",
         claim_secret: "claim-secret-0123456789abcdef0123456789abcdef",
         expires_at: 2_000_000_000_000,
       }), { status: 200, headers: { "content-type": "application/json" } }))

@@ -5,7 +5,6 @@ import { PairingClient, normalizeCptrOrigin } from "../transport/pairing.js";
 export interface PairingClientLike {
   request(deviceName: string): Promise<{
     pairingId: string;
-    code: string;
     claimSecret: string;
     expiresAt: number;
   }>;
@@ -45,7 +44,6 @@ export class ExtensionCoordinator {
 
   async requestPairing(cptrOrigin: string, deviceName: string): Promise<{
     pairingId: string;
-    code: string;
     expiresAt: number;
     cptrOrigin: string;
     deviceName: string;
@@ -68,7 +66,6 @@ export class ExtensionCoordinator {
 
     return {
       pairingId: pairing.pairingId,
-      code: pairing.code,
       expiresAt: pairing.expiresAt,
       cptrOrigin: origin,
       deviceName: name,

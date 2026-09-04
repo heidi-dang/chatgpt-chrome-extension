@@ -18,7 +18,7 @@ describe("MV3 background coordinator", () => {
     const deviceState = new DeviceStateRepository(new MemoryStorage());
     const pairingState = new PendingPairingRepository(new MemoryStorage());
     const pairingClient = {
-      request: vi.fn(async () => ({ pairingId: "pair_1", code: "123456", claimSecret, expiresAt: Date.now() + 60_000 })),
+      request: vi.fn(async () => ({ pairingId: "pair_1", claimSecret, expiresAt: Date.now() + 60_000 })),
       claim: vi.fn(),
     };
     const transport = { start: vi.fn(async () => true), stop: vi.fn() };
@@ -26,7 +26,7 @@ describe("MV3 background coordinator", () => {
 
     const visible = await coordinator.requestPairing("https://cptr.example.com", "Heidi Chrome");
 
-    expect(visible).toMatchObject({ pairingId: "pair_1", code: "123456" });
+    expect(visible).toMatchObject({ pairingId: "pair_1" });
     expect(JSON.stringify(visible)).not.toContain(claimSecret);
     expect(await pairingState.load()).toMatchObject({ pairingId: "pair_1", claimSecret });
   });

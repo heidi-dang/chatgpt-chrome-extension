@@ -19,12 +19,19 @@ interface DocumentResponse { root?: { nodeId?: number } }
 interface QueryResponse { nodeIds?: number[] }
 interface BoxResponse { model?: { border?: number[]; content?: number[] } }
 interface ScreenshotResponse { data?: string }
+interface LayoutMetricsResponse {
+  cssVisualViewport?: { clientWidth?: number; clientHeight?: number };
+  cssLayoutViewport?: { clientWidth?: number; clientHeight?: number };
+  layoutViewport?: { clientWidth?: number; clientHeight?: number };
+}
 
 export interface ScreenshotResult {
   mimeType: "image/jpeg";
   data: string | null;
   blocked: boolean;
   maskedRegions: number;
+  width: number;
+  height: number;
 }
 
 function rectFromQuad(quad: number[] | undefined): MaskRect | null {
@@ -48,8 +55,9 @@ export class ScreenshotController {
   ) {}
 
   async capture(tabId: number, url: string, options: { quality?: number } = {}): Promise<ScreenshotResult> {
+    const { width, height } = await this.viewportSize(tabId);
     if (this.curtain.isProtected(url)) {
-      return { mimeType: "image/jpeg", data: null, blocked: true, maskedRegions: 0 };
+      return { mimeType: "image/jpeg", data: null, blocked: true, maskedRegions: 0, width, height };
     }
     const quality = Math.min(90, Math.max(20, Math.round(options.quality ?? 65)));
     const masks = await this.findSensitiveRegions(tabId);
@@ -66,7 +74,20 @@ export class ScreenshotController {
       data,
       blocked: false,
       maskedRegions: masks.length,
+      width,
+      height,
     };
+  }
+
+  private async viewportSize(tabId: number): Promise<{ width: number; height: number }> {
+    const metrics = await this.cdp.send(tabId, "Page.getLayoutMetrics", {}) as LayoutMetricsResponse;
+    const viewport = metrics.cssVisualViewport ?? metrics.cssLayoutViewport ?? metrics.layoutViewport;
+    const width = viewport?.clientWidth;
+    const height = viewport?.clientHeight;
+    if (typeof width !== "number" || !Number.isFinite(width) || width <= 0 || typeof height !== "number" || !Number.isFinite(height) || height <= 0) {
+      throw new Error("Chrome did not report a valid viewport size");
+    }
+    return { width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) };
   }
 
   private async findSensitiveRegions(tabId: number): Promise<MaskRect[]> {

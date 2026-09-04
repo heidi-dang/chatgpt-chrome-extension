@@ -2,7 +2,6 @@ import { z } from "zod";
 
 const pairingResponseSchema = z.object({
   pairing_id: z.string().min(1).max(200),
-  code: z.string().regex(/^\d{6}$/),
   claim_secret: z.string().min(32).max(1024),
   expires_at: z.number().int().positive(),
 }).strict();
@@ -15,7 +14,6 @@ const claimResponseSchema = z.object({
 
 export type PairingRequest = {
   pairingId: string;
-  code: string;
   claimSecret: string;
   expiresAt: number;
 };
@@ -76,7 +74,6 @@ export class PairingClient {
     const value = await parseJson(response, pairingResponseSchema);
     return {
       pairingId: value.pairing_id,
-      code: value.code,
       claimSecret: value.claim_secret,
       expiresAt: value.expires_at,
     };

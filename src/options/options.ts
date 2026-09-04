@@ -4,7 +4,6 @@ type RuntimeResponse<T> = { ok: true; result: T } | { ok: false; error: string }
 
 type PairingResult = {
   pairingId: string;
-  code: string;
   expiresAt: number;
 };
 
@@ -26,7 +25,6 @@ const originInput = requiredElement("#cptr-origin") as HTMLInputElement;
 const deviceInput = requiredElement("#device-name") as HTMLInputElement;
 const statusEl = requiredElement("#status") as HTMLElement;
 const pairingEl = requiredElement("#pairing") as HTMLElement;
-const codeEl = requiredElement("#pair-code") as HTMLElement;
 const pairingIdEl = requiredElement("#pairing-id") as HTMLElement;
 const claimButton = requiredElement("#claim-button") as HTMLButtonElement;
 
@@ -77,11 +75,10 @@ form.addEventListener("submit", (event) => {
       if (!granted) throw new Error("Chrome host permission is required for the trusted CPTR origin.");
       setStatus("Requesting secure pairing…");
       const result = await runtimeMessage<PairingResult>({ type: "pairing.request", cptrOrigin, deviceName });
-      codeEl.textContent = result.code;
       pairingIdEl.textContent = result.pairingId;
       claimButton.dataset.pairingId = result.pairingId;
       pairingEl.hidden = false;
-      setStatus("Approve this six-digit code through authenticated CPTR, then click Claim pairing.", "ok");
+      setStatus("Approve this exact pairing ID through authenticated CPTR, then click Claim pairing.", "ok");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Pairing request failed.", "error");
     }

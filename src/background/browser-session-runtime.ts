@@ -26,6 +26,17 @@ export type RuntimeResult = {
   payload: Record<string, unknown>;
 };
 
+function failurePayload(error: unknown, fallback: string): Record<string, unknown> {
+  const message = error instanceof Error ? error.message : fallback;
+  const rawCode = error instanceof Error ? error.name : "BrowserRuntimeError";
+  const code = rawCode
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase() || "browser_runtime_error";
+  return { error: message, code, retriable: false };
+}
+
 export type BrowserHandoffMessage = ServerMessage & {
   type: "browser.handoff.accepted" | "browser.handoff.returned" | "browser.handoff.cancelled";
   payload: Record<string, unknown>;
@@ -107,7 +118,7 @@ export class BrowserSessionRuntime {
       return {
         type: "browser.command.failed",
         commandId: message.command_id,
-        payload: { error: error instanceof Error ? error.message : "Browser command failed" },
+        payload: failurePayload(error, "Browser command failed"),
       };
     }
   }
@@ -125,7 +136,7 @@ export class BrowserSessionRuntime {
       return {
         type: "browser.command.failed",
         commandId: message.command_id,
-        payload: { error: error instanceof Error ? error.message : "Human browser input failed" },
+        payload: failurePayload(error, "Human browser input failed"),
       };
     }
   }
@@ -168,7 +179,7 @@ export class BrowserSessionRuntime {
       return {
         type: "browser.command.failed",
         commandId: message.command_id,
-        payload: { error: error instanceof Error ? error.message : "Browser handoff preparation failed" },
+        payload: failurePayload(error, "Browser handoff preparation failed"),
       };
     }
   }
@@ -237,14 +248,17 @@ export class BrowserSessionRuntime {
       this.sessionId = message.session_id;
       this.mode = message.mode;
       this.lease = new BrowserLease({ deviceId: message.device_id, tabId, sessionId: message.session_id });
-      const authoritativeEpoch = expectedEpoch ?? 1;
-      const lease = this.lease.bootstrapAgent(authoritativeEpoch);
+      if (expectedEpoch === undefined) throw new Error("attach requires expected_epoch");
+      const lease = this.lease.bootstrapAgent(expectedEpoch);
       await this.persist();
       this.updateFramePump(tab.url, false);
       return { tab, lease };
     }
     if (action === "detach") {
       const tabId = this.requireTab();
+      const lease = this.requireLease();
+      if (expectedEpoch === undefined) throw new Error("detach requires expected_epoch");
+      lease.assertMutation("agent", expectedEpoch);
       await this.debuggerController.detach(tabId);
       this.stop();
       return { detached: true };
@@ -479,7 +493,7 @@ export class BrowserSessionRuntime {
           this.requireString(args.approval_token, "evaluate requires approval_token"),
         );
       default:
-        throw new Error(`Browser action is not implemented by this extension build: ${action}`);
+        throw new Error("Browser action is not implemented by this extension build");
     }
   }
 
@@ -542,8 +556,6 @@ export class BrowserSessionRuntime {
       visible: true,
       interacting,
       backgrounded: false,
-      viewportWidth: 1280,
-      viewportHeight: 720,
     });
   }
 

@@ -118,7 +118,7 @@ describe("device control WebSocket", () => {
     await transport.start();
     socket.open();
     socket.message(JSON.stringify({ protocol_version: PROTOCOL_VERSION, type: "device.authenticated", device_id: "bdv_1" }));
-    const ping = (sequence: number) => JSON.stringify({
+    const event = (sequence: number) => JSON.stringify({
       protocol_version: PROTOCOL_VERSION,
       session_id: "brs_1",
       surface_id: "wbs_1",
@@ -126,13 +126,13 @@ describe("device control WebSocket", () => {
       sequence,
       timestamp: "2026-09-03T01:00:00.000Z",
       source: "cptr",
-      mode: "OBSERVING",
-      type: "browser.ping",
+      mode: "DISCONNECTED",
+      type: "browser.handoff.cancelled",
       payload: {},
     });
-    socket.message(ping(831));
-    socket.message(ping(831));
-    socket.message(ping(832));
+    socket.message(event(831));
+    socket.message(event(831));
+    socket.message(event(832));
 
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(2));
     await vi.waitFor(async () => expect((await repo.load())?.resumeSequence).toBe(832));

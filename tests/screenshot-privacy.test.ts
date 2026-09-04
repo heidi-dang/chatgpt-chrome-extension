@@ -6,6 +6,7 @@ class FakeCdp {
   readonly calls: Array<{ method: string; params: object }> = [];
   async send(_tabId: number, method: string, params: object = {}): Promise<object> {
     this.calls.push({ method, params });
+    if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 1280, clientHeight: 720 } };
     if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
     if (method === "DOM.querySelectorAll") return { nodeIds: [10] };
     if (method === "DOM.getBoxModel") return { model: { border: [5, 6, 105, 6, 105, 46, 5, 46] } };
@@ -30,7 +31,14 @@ describe("screenshot privacy boundary", () => {
 
     const result = await screenshots.capture(7, "https://example.com/account", { quality: 65 });
 
-    expect(result).toEqual({ mimeType: "image/jpeg", data: "masked-base64", blocked: false, maskedRegions: 1 });
+    expect(result).toEqual({
+      mimeType: "image/jpeg",
+      data: "masked-base64",
+      blocked: false,
+      maskedRegions: 1,
+      width: 1280,
+      height: 720,
+    });
     expect(masker.calls[0]?.rects).toEqual([{ x: 5, y: 6, width: 100, height: 40 }]);
     expect(cdp.calls.map((call) => call.method)).toContain("Page.captureScreenshot");
   });
@@ -42,8 +50,15 @@ describe("screenshot privacy boundary", () => {
 
     const result = await screenshots.capture(7, "https://secure.example.com/mfa", { quality: 65 });
 
-    expect(result).toEqual({ mimeType: "image/jpeg", data: null, blocked: true, maskedRegions: 0 });
-    expect(cdp.calls).toEqual([]);
+    expect(result).toEqual({
+      mimeType: "image/jpeg",
+      data: null,
+      blocked: true,
+      maskedRegions: 0,
+      width: 1280,
+      height: 720,
+    });
+    expect(cdp.calls.map((call) => call.method)).toEqual(["Page.getLayoutMetrics"]);
     expect(masker.calls).toEqual([]);
   });
 });

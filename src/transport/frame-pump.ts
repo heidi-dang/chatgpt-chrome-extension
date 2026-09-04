@@ -18,8 +18,6 @@ export type FramePumpContext = {
   visible: boolean;
   interacting: boolean;
   backgrounded: boolean;
-  viewportWidth: number;
-  viewportHeight: number;
 };
 
 export class BrowserFramePump {
@@ -88,8 +86,8 @@ export class BrowserFramePump {
           sessionId: context.sessionId,
           frameId: `frm_${startedAt.toString(36)}`,
           mimeType: result.mimeType,
-          width: Math.max(1, Math.min(context.viewportWidth, target.maxWidth)),
-          height: Math.max(1, context.viewportHeight),
+          width: result.width,
+          height: result.height,
           createdAtMs: startedAt,
           dataBase64: result.data,
         };

@@ -4,7 +4,6 @@ export const PROTOCOL_VERSION = 1 as const;
 
 export const BROWSER_ACTIONS = [
   "status",
-  "devices",
   "attach",
   "detach",
   "list_tabs",
@@ -85,6 +84,8 @@ export type HumanInputType = (typeof HUMAN_INPUT_TYPES)[number];
 export type BrowserMode = "DISCONNECTED" | "OBSERVING" | "AGENT_CONTROL" | "HANDOFF_REQUIRED" | "HUMAN_CONTROL";
 
 const MUTATING_ACTIONS = new Set<BrowserAction>([
+  "attach",
+  "detach",
   "activate_tab",
   "open_tab",
   "close_tab",
@@ -204,7 +205,6 @@ const streamConfigureMessageSchema = z.object({
 const simpleServerMessageSchema = z.object({
   ...baseEnvelopeFields,
   type: z.enum([
-    "browser.ping",
     "browser.session.stop",
     "browser.handoff.accepted",
     "browser.handoff.prepare_return",
