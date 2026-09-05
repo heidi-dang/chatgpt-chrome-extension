@@ -141,6 +141,12 @@ void browserRuntimes.discardPersisted()
     void Promise.all([transport.start(), visualTransport.start()]).catch((error: unknown) => diagnosticError("transport startup", error));
   });
 
+// MV3 service workers are event-driven and are not guaranteed to run merely
+// because Chrome launched. Register an explicit startup listener so Chrome
+// wakes this worker after every browser restart; the module-level startup above
+// then restores the persisted device state and reconnects both transports.
+chrome.runtime.onStartup.addListener(() => undefined);
+
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.runtime.openOptionsPage();
 });

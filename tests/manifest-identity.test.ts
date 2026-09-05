@@ -17,8 +17,17 @@ describe("release extension identity", () => {
       key?: string;
     };
 
-    expect(manifest.version).toBe("0.1.6");
+    expect(manifest.version).toBe("0.1.7");
     expect(manifest.key).toBeTypeOf("string");
     expect(extensionIdFromPublicKey(manifest.key ?? "")).toBe(expectedExtensionId);
+  });
+
+  it("registers a browser-startup wake event so the MV3 worker reconnects after Chrome restarts", async () => {
+    const serviceWorkerSource = await readFile(
+      new URL("../src/background/service-worker.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(serviceWorkerSource).toContain("chrome.runtime.onStartup.addListener");
   });
 });
