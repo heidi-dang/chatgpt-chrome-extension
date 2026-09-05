@@ -20,6 +20,7 @@ export type DeviceControlTransportOptions = {
   reconnectPolicy?: ReconnectPolicy;
   onMessage: (message: ServerMessage) => void;
   onState?: (state: DeviceConnectionState) => void;
+  onDisconnect?: () => void | Promise<void>;
   onError?: (error: Error) => void;
 };
 
@@ -54,6 +55,7 @@ export class DeviceControlTransport {
   private readonly reconnectPolicy: ReconnectPolicy;
   private readonly onMessage: (message: ServerMessage) => void;
   private readonly onState: (state: DeviceConnectionState) => void;
+  private readonly onDisconnect: () => void | Promise<void>;
   private readonly onError: (error: Error) => void;
   private readonly cursor = new SequenceCursor();
   private socket: SocketLike | null = null;
@@ -69,6 +71,7 @@ export class DeviceControlTransport {
     this.reconnectPolicy = options.reconnectPolicy ?? new ReconnectPolicy();
     this.onMessage = options.onMessage;
     this.onState = options.onState ?? (() => undefined);
+    this.onDisconnect = options.onDisconnect ?? (() => undefined);
     this.onError = options.onError ?? (() => undefined);
   }
 
@@ -95,8 +98,10 @@ export class DeviceControlTransport {
   }
 
   stop(): void {
+    const wasAuthenticated = this.authenticated;
     this.stopped = true;
     this.authenticated = false;
+    if (wasAuthenticated) this.notifyDisconnect();
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -143,8 +148,10 @@ export class DeviceControlTransport {
     });
     socket.addEventListener("close", () => {
       if (socket !== this.socket) return;
+      const wasAuthenticated = this.authenticated;
       this.socket = null;
       this.authenticated = false;
+      if (!this.stopped && wasAuthenticated) this.notifyDisconnect();
       if (!this.stopped) this.scheduleReconnect();
     });
     socket.addEventListener("error", () => {
@@ -182,6 +189,12 @@ export class DeviceControlTransport {
       this.onError(normalized);
       this.socket?.close(1008, "invalid browser-device message");
     }
+  }
+
+  private notifyDisconnect(): void {
+    void Promise.resolve(this.onDisconnect()).catch((error: unknown) => {
+      this.onError(error instanceof Error ? error : new Error(String(error)));
+    });
   }
 
   private handleConnectionFailure(error: unknown): void {

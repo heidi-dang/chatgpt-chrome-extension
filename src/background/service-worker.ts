@@ -12,8 +12,9 @@ const localStorage = chromeLocalStorage();
 const deviceState = new DeviceStateRepository(localStorage);
 const sessionStorage = chromeSessionStorage();
 const pairingState = new PendingPairingRepository(sessionStorage);
-// Browser session/lease metadata contains no credentials and must survive an
-// unpacked-extension reload so attached tabs can be restored after upgrades.
+// Browser session/lease metadata contains no credentials, but the CPTR backend
+// invalidates every browser lease when the control socket disconnects. Persisted
+// rows are therefore cleanup hints only and must never re-authorize debugger control.
 const browserSessionState = new BrowserSessionStateRepository(localStorage);
 const isHandoffMessage = (message: { type: string }): message is BrowserHandoffMessage =>
   message.type === "browser.handoff.accepted" ||
@@ -40,6 +41,9 @@ const transport = new DeviceControlTransport({
   stateRepository: deviceState,
   onError: (error) => diagnosticError("control transport", error),
   onState: diagnosticState,
+  onDisconnect: async () => {
+    await browserRuntimes.closeAll();
+  },
   onMessage: (message) => {
     if (message.type === "browser.command") {
       void browserRuntimes.handleCommand(message)
@@ -131,8 +135,8 @@ const transport = new DeviceControlTransport({
 });
 const coordinator = new ExtensionCoordinator({ deviceState, pairingState, transport });
 
-void browserRuntimes.restoreAll()
-  .catch((error: unknown) => diagnosticError("session restore", error))
+void browserRuntimes.discardPersisted()
+  .catch((error: unknown) => diagnosticError("session cleanup", error))
   .finally(() => {
     void Promise.all([transport.start(), visualTransport.start()]).catch((error: unknown) => diagnosticError("transport startup", error));
   });

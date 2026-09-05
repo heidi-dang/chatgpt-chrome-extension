@@ -31,16 +31,26 @@ export class BrowserSessionRuntimeRegistry {
     this.discoveryRuntime = new BrowserSessionRuntime(visualTransport);
   }
 
-  async restoreAll(): Promise<number> {
-    let restored = 0;
-    for (const saved of await this.sessionState.loadAll()) {
-      const runtime = this.createRuntime();
-      if (await runtime.restore(saved.sessionId)) {
-        this.runtimes.set(saved.sessionId, runtime);
-        restored += 1;
+  async discardPersisted(): Promise<number> {
+    const persisted = await this.sessionState.loadAll();
+    await this.sessionState.clear();
+    return persisted.length;
+  }
+
+  async closeAll(): Promise<number> {
+    const runtimes = [...this.runtimes.values()];
+    this.runtimes.clear();
+    let firstError: Error | null = null;
+    for (const runtime of runtimes) {
+      try {
+        await runtime.close();
+      } catch (error) {
+        firstError ??= error instanceof Error ? error : new Error(String(error));
       }
     }
-    return restored;
+    await this.sessionState.clear();
+    if (firstError) throw firstError;
+    return runtimes.length;
   }
 
   async handleCommand(message: BrowserCommandMessage): Promise<RuntimeResult> {

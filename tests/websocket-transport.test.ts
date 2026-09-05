@@ -139,6 +139,45 @@ describe("device control WebSocket", () => {
     transport.stop();
   });
 
+  it("notifies browser runtimes when an authenticated control socket is lost", async () => {
+    const repo = await configuredRepository();
+    const socket = new FakeSocket();
+    const onDisconnect = vi.fn(async () => undefined);
+    const transport = new DeviceControlTransport({
+      stateRepository: repo,
+      socketFactory: () => socket,
+      onMessage: vi.fn(),
+      onDisconnect,
+    });
+
+    await transport.start();
+    socket.open();
+    socket.message(JSON.stringify({ protocol_version: PROTOCOL_VERSION, type: "device.authenticated", device_id: "bdv_1" }));
+    socket.disconnect();
+
+    await vi.waitFor(() => expect(onDisconnect).toHaveBeenCalledOnce());
+    transport.stop();
+  });
+
+  it("invalidates browser runtimes when an authenticated transport is explicitly stopped", async () => {
+    const repo = await configuredRepository();
+    const socket = new FakeSocket();
+    const onDisconnect = vi.fn(async () => undefined);
+    const transport = new DeviceControlTransport({
+      stateRepository: repo,
+      socketFactory: () => socket,
+      onMessage: vi.fn(),
+      onDisconnect,
+    });
+
+    await transport.start();
+    socket.open();
+    socket.message(JSON.stringify({ protocol_version: PROTOCOL_VERSION, type: "device.authenticated", device_id: "bdv_1" }));
+    transport.stop();
+
+    await vi.waitFor(() => expect(onDisconnect).toHaveBeenCalledOnce());
+  });
+
   it("rejects malformed server messages instead of routing them", async () => {
     const repo = await configuredRepository();
     const socket = new FakeSocket();
