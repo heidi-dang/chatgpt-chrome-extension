@@ -1,11 +1,34 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  BROWSER_ACTIONS,
   PROTOCOL_VERSION,
+  actionMutatesBrowser,
   parseServerMessage,
   type BrowserCommandMessage,
 } from "../src/transport/protocol.js";
 
+const browserContract = JSON.parse(
+  readFileSync(new URL("../contracts/browser-protocol-v1.json", import.meta.url), "utf8"),
+) as {
+  contract: string;
+  contract_revision: number;
+  protocol_version: number;
+  browser_actions: string[];
+  mutating_browser_actions: string[];
+};
+
 describe("browser wire protocol", () => {
+  it("matches the checked-in cross-repo protocol manifest", () => {
+    expect(browserContract.contract).toBe("cptr-browser-device");
+    expect(browserContract.contract_revision).toBe(1);
+    expect(browserContract.protocol_version).toBe(PROTOCOL_VERSION);
+    expect(browserContract.browser_actions).toEqual([...BROWSER_ACTIONS]);
+    expect(browserContract.mutating_browser_actions).toEqual(
+      BROWSER_ACTIONS.filter((action) => actionMutatesBrowser(action)),
+    );
+  });
+
   it("accepts a versioned browser command envelope", () => {
     const value = parseServerMessage({
       protocol_version: PROTOCOL_VERSION,

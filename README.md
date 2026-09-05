@@ -40,7 +40,9 @@ npm ci
 npm run check
 ```
 
-`npm run check` runs strict TypeScript, ESLint, Vitest, and the production build. The unpacked extension is emitted to `dist/`.
+`npm run check` runs strict TypeScript, ESLint, Vitest, and the production build. The protocol suite also verifies the implementation against `contracts/browser-protocol-v1.json`, which must stay identical to the plugin and CPTR backend copies. The unpacked extension is emitted to `dist/`.
+
+CI runs the same `npm run check` gate on pull requests and `main`. Generated `release-*` and `hotfix-*` packaging directories are ignored so release output cannot silently become source input.
 
 ## Install in Chrome
 
@@ -95,6 +97,10 @@ Current implementation includes:
 ## Intentional limitation: file upload
 
 `upload_file` is not enabled for arbitrary MCP-provided filesystem paths. `DOM.setFileInputFiles` requires host-local paths and would create a new file-access trust boundary. Until CPTR has an explicit approved file broker that maps authorized connector/workspace files to browser-host paths, uploads should be completed in HUMAN_CONTROL through Chrome's native file picker.
+
+## Cross-repo release discipline
+
+The plugin repository owns the aggregate cross-repo compatibility/release runbook at `docs/cross-repo-release-gate.md`. Browser protocol changes are not complete until the plugin, backend, and extension manifests converge and all repository-local gates pass. Breaking wire changes require a protocol-version transition; do not silently replace protocol v1.
 
 ## Development invariants
 
