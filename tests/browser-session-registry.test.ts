@@ -91,4 +91,66 @@ describe("BrowserSessionRuntimeRegistry", () => {
     expect(debuggerApi.detach).toHaveBeenCalledWith({ tabId: 7 });
     await registry.handleCommand(command("brs_replit", "detach_replit", "detach"));
   });
+
+  it("detaches every active debugger runtime and clears mirrors after control-channel loss", async () => {
+    const debuggerApi = {
+      attach: vi.fn(async () => undefined),
+      detach: vi.fn(async () => undefined),
+      sendCommand: vi.fn(async () => ({})),
+      onDetach: { addListener: vi.fn() },
+    };
+    const tabs = new Map<number, Partial<chrome.tabs.Tab>>([
+      [7, { id: 7, windowId: 1, active: false, title: "GitHub", url: "https://github.com", pinned: false, incognito: false, status: "complete" }],
+      [8, { id: 8, windowId: 1, active: true, title: "Docs", url: "https://example.com", pinned: false, incognito: false, status: "complete" }],
+    ]);
+    const tabsApi = {
+      query: vi.fn(async () => [...tabs.values()]),
+      get: vi.fn(async (id: number) => tabs.get(id) as chrome.tabs.Tab),
+      update: vi.fn(),
+      create: vi.fn(),
+      remove: vi.fn(),
+      duplicate: vi.fn(),
+    };
+    vi.stubGlobal("chrome", { debugger: debuggerApi, tabs: tabsApi });
+
+    const saved = new Map<string, SavedState>();
+    const sessionState = {
+      load: vi.fn(async (sessionId?: string) => sessionId ? saved.get(sessionId) ?? null : [...saved.values()][0] ?? null),
+      loadAll: vi.fn(async () => [...saved.values()]),
+      save: vi.fn(async (state: SavedState) => { saved.set(state.sessionId, state); }),
+      clear: vi.fn(async (sessionId?: string) => { if (sessionId) saved.delete(sessionId); else saved.clear(); }),
+    };
+    const registry = new BrowserSessionRuntimeRegistry(
+      { sendFrame: vi.fn(() => true) } as never,
+      sessionState as never,
+    );
+
+    await registry.handleCommand(command("brs_1", "attach_1", "attach", { tab_id: 7 }, 1));
+    await registry.handleCommand(command("brs_2", "attach_2", "attach", { tab_id: 8 }, 1));
+    expect(saved.size).toBe(2);
+
+    await registry.closeAll();
+
+    expect(debuggerApi.detach).toHaveBeenCalledWith({ tabId: 7 });
+    expect(debuggerApi.detach).toHaveBeenCalledWith({ tabId: 8 });
+    expect(saved.size).toBe(0);
+  });
+
+  it("discards persisted session mirrors at startup instead of reattaching stale backend leases", async () => {
+    const sessionState = {
+      load: vi.fn(),
+      loadAll: vi.fn(async () => [
+        { deviceId: "bdv_1", sessionId: "brs_stale", tabId: 7, mode: "AGENT_CONTROL", owner: "agent", epoch: 3, snapshotId: null },
+      ]),
+      save: vi.fn(),
+      clear: vi.fn(async () => undefined),
+    };
+    const registry = new BrowserSessionRuntimeRegistry(
+      { sendFrame: vi.fn(() => true) } as never,
+      sessionState as never,
+    );
+
+    expect(await registry.discardPersisted()).toBe(1);
+    expect(sessionState.clear).toHaveBeenCalledWith();
+  });
 });
