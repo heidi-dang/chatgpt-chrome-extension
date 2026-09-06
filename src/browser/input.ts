@@ -44,16 +44,11 @@ export class BrowserInputController {
   }
 
   async fill(tabId: number, ref: string, snapshotId: string, text: string): Promise<void> {
-    await this.clear(tabId, ref, snapshotId);
-    await this.cdp.send(tabId, "Input.insertText", { text });
+    await this.setEditableValue(tabId, ref, snapshotId, text);
   }
 
   async clear(tabId: number, ref: string, snapshotId: string): Promise<void> {
-    await this.focus(tabId, ref, snapshotId);
-    await this.dispatchKey(tabId, "rawKeyDown", "a", "KeyA", 2);
-    await this.dispatchKey(tabId, "keyUp", "a", "KeyA", 2);
-    await this.dispatchKey(tabId, "rawKeyDown", "Backspace", "Backspace", 0);
-    await this.dispatchKey(tabId, "keyUp", "Backspace", "Backspace", 0);
+    await this.setEditableValue(tabId, ref, snapshotId, "");
   }
 
   async type(tabId: number, ref: string, snapshotId: string, text: string): Promise<void> {
@@ -104,6 +99,17 @@ export class BrowserInputController {
       objectId,
       functionDeclaration: "function(checked){if(!(this instanceof HTMLInputElement)||(this.type!=='checkbox'&&this.type!=='radio'))throw new Error('Target is not checkable');if(this.checked===checked)return;this.checked=checked;this.dispatchEvent(new Event('input',{bubbles:true}));this.dispatchEvent(new Event('change',{bubbles:true}));}",
       arguments: [{ value: checked }],
+      awaitPromise: false,
+      returnByValue: true,
+    });
+  }
+
+  private async setEditableValue(tabId: number, ref: string, snapshotId: string, value: string): Promise<void> {
+    const objectId = await this.resolveObjectId(tabId, ref, snapshotId);
+    await this.cdp.send(tabId, "Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: "function(value){const emit=()=>{this.dispatchEvent(new Event('input',{bubbles:true}));this.dispatchEvent(new Event('change',{bubbles:true}));};if(this instanceof HTMLInputElement){const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;if(!setter)throw new Error('Input value setter unavailable');setter.call(this,value);emit();return;}if(this instanceof HTMLTextAreaElement){const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')?.set;if(!setter)throw new Error('Textarea value setter unavailable');setter.call(this,value);emit();return;}if(this instanceof HTMLElement&&this.isContentEditable){this.textContent=value;emit();return;}throw new Error('Target is not editable');}",
+      arguments: [{ value }],
       awaitPromise: false,
       returnByValue: true,
     });

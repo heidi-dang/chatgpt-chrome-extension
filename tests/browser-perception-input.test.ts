@@ -153,7 +153,7 @@ describe("ref-based input", () => {
     await expect(input.selectOption(7, "ref_18", "snap_old", "AU")).rejects.toThrow(/stale/i);
   });
 
-  it("clears and fills a ref using focus + key events instead of arbitrary page evaluation", async () => {
+  it("clears and fills controlled editables with native value setters and change events", async () => {
     const cdp = new FakeCdp();
     const refs = new SnapshotRefs();
     refs.replace("snap_1", new Map([["ref_18", { backendNodeId: 18 }]]));
@@ -163,19 +163,28 @@ describe("ref-based input", () => {
     await input.fill(7, "ref_18", "snap_1", "hello");
 
     expect(cdp.calls.map((call) => call.method)).toEqual([
-      "DOM.focus",
-      "Input.dispatchKeyEvent",
-      "Input.dispatchKeyEvent",
-      "Input.dispatchKeyEvent",
-      "Input.dispatchKeyEvent",
-      "DOM.focus",
-      "Input.dispatchKeyEvent",
-      "Input.dispatchKeyEvent",
-      "Input.dispatchKeyEvent",
-      "Input.dispatchKeyEvent",
-      "Input.insertText",
+      "DOM.resolveNode",
+      "Runtime.callFunctionOn",
+      "DOM.resolveNode",
+      "Runtime.callFunctionOn",
     ]);
-    expect(cdp.calls.at(-1)?.params).toEqual({ text: "hello" });
+    const mutations = cdp.calls.filter((call) => call.method === "Runtime.callFunctionOn");
+    expect(mutations[0]?.params).toMatchObject({ objectId: "obj_18", arguments: [{ value: "" }], awaitPromise: false, returnByValue: true });
+    expect(mutations[1]?.params).toMatchObject({ objectId: "obj_18", arguments: [{ value: "hello" }], awaitPromise: false, returnByValue: true });
+    const functionDeclaration = String((mutations[1]?.params as { functionDeclaration?: string }).functionDeclaration);
+    expect(functionDeclaration).toContain("HTMLInputElement.prototype");
+    expect(functionDeclaration).toContain("HTMLTextAreaElement.prototype");
+    expect(functionDeclaration).toContain("isContentEditable");
+    expect(functionDeclaration).toContain("new Event('input'");
+    expect(functionDeclaration).toContain("new Event('change'");
+    expect(cdp.calls.some((call) => call.method === "Input.dispatchKeyEvent")).toBe(false);
+    expect(cdp.calls.some((call) => call.method === "Input.insertText")).toBe(false);
+
+    await input.type(7, "ref_18", "snap_1", "append");
+    expect(cdp.calls.slice(-2)).toEqual([
+      { tabId: 7, method: "DOM.focus", params: { backendNodeId: 18 } },
+      { tabId: 7, method: "Input.insertText", params: { text: "append" } },
+    ]);
   });
 });
 
