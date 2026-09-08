@@ -80,7 +80,10 @@ export class BrowserFramePump {
     this.running = true;
     const startedAt = Date.now();
     try {
-      const result = await this.screenshots.capture(context.tabId, context.url, { quality: target.quality });
+      const result = await this.screenshots.capture(context.tabId, context.url, {
+        quality: target.quality,
+        maxWidth: target.maxWidth,
+      });
       if (!result.blocked && result.data) {
         const frame: VisualFrameEnvelope = {
           sessionId: context.sessionId,

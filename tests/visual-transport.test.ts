@@ -97,6 +97,11 @@ describe("browser frame pump", () => {
     pump.configure({ visible: true, maxFps: 10, maxWidth: 1280, quality: 68 });
     await vi.runOnlyPendingTimersAsync();
     expect(screenshots.capture).toHaveBeenCalledTimes(2);
+    expect(screenshots.capture).toHaveBeenLastCalledWith(
+      7,
+      "https://example.com",
+      { quality: 68, maxWidth: 1280 },
+    );
 
     pump.stop();
     vi.useRealTimers();
