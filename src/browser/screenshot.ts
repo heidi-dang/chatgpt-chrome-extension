@@ -19,10 +19,17 @@ interface DocumentResponse { root?: { nodeId?: number } }
 interface QueryResponse { nodeIds?: number[] }
 interface BoxResponse { model?: { border?: number[]; content?: number[] } }
 interface ScreenshotResponse { data?: string }
+interface ViewportMetrics {
+  pageX?: number;
+  pageY?: number;
+  clientWidth?: number;
+  clientHeight?: number;
+}
+
 interface LayoutMetricsResponse {
-  cssVisualViewport?: { clientWidth?: number; clientHeight?: number };
-  cssLayoutViewport?: { clientWidth?: number; clientHeight?: number };
-  layoutViewport?: { clientWidth?: number; clientHeight?: number };
+  cssVisualViewport?: ViewportMetrics;
+  cssLayoutViewport?: ViewportMetrics;
+  layoutViewport?: ViewportMetrics;
 }
 
 export interface ScreenshotResult {
@@ -54,40 +61,90 @@ export class ScreenshotController {
     private readonly curtain: PrivacyCurtainPolicy,
   ) {}
 
-  async capture(tabId: number, url: string, options: { quality?: number } = {}): Promise<ScreenshotResult> {
-    const { width, height } = await this.viewportSize(tabId);
+  async capture(
+    tabId: number,
+    url: string,
+    options: { quality?: number; maxWidth?: number } = {},
+  ): Promise<ScreenshotResult> {
+    const viewport = await this.viewportSize(tabId);
+    const { width, height } = viewport;
     if (this.curtain.isProtected(url)) {
       return { mimeType: "image/jpeg", data: null, blocked: true, maskedRegions: 0, width, height };
     }
+
     const quality = Math.min(90, Math.max(20, Math.round(options.quality ?? 65)));
+    let maxWidth: number | null = null;
+    if (options.maxWidth !== undefined) {
+      if (!Number.isFinite(options.maxWidth) || options.maxWidth <= 0) {
+        throw new Error("Screenshot maxWidth must be a positive finite number");
+      }
+      maxWidth = Math.max(1, Math.round(options.maxWidth));
+    }
+    const scale = maxWidth !== null && width > maxWidth ? maxWidth / width : 1;
+    const outputWidth = Math.max(1, Math.round(width * scale));
+    const outputHeight = Math.max(1, Math.round(height * scale));
+
     const masks = await this.findSensitiveRegions(tabId);
-    const response = await this.cdp.send(tabId, "Page.captureScreenshot", {
+    const captureParams: Record<string, unknown> = {
       format: "jpeg",
       quality,
       fromSurface: true,
       captureBeyondViewport: false,
-    }) as ScreenshotResponse;
+    };
+    if (scale < 1) {
+      captureParams.clip = {
+        x: viewport.x,
+        y: viewport.y,
+        width,
+        height,
+        scale,
+      };
+    }
+    const response = await this.cdp.send(tabId, "Page.captureScreenshot", captureParams) as ScreenshotResponse;
     if (!response.data) throw new Error("Chrome returned an empty screenshot");
-    const data = masks.length > 0 ? await this.masker.mask(response.data, masks, quality) : response.data;
+
+    const outputMasks = scale < 1
+      ? masks.map((rect) => ({
+          x: rect.x * scale,
+          y: rect.y * scale,
+          width: rect.width * scale,
+          height: rect.height * scale,
+        }))
+      : masks;
+    const data = outputMasks.length > 0
+      ? await this.masker.mask(response.data, outputMasks, quality)
+      : response.data;
     return {
       mimeType: "image/jpeg",
       data,
       blocked: false,
       maskedRegions: masks.length,
-      width,
-      height,
+      width: outputWidth,
+      height: outputHeight,
     };
   }
 
-  private async viewportSize(tabId: number): Promise<{ width: number; height: number }> {
+  private async viewportSize(
+    tabId: number,
+  ): Promise<{ x: number; y: number; width: number; height: number }> {
     const metrics = await this.cdp.send(tabId, "Page.getLayoutMetrics", {}) as LayoutMetricsResponse;
     const viewport = metrics.cssVisualViewport ?? metrics.cssLayoutViewport ?? metrics.layoutViewport;
     const width = viewport?.clientWidth;
     const height = viewport?.clientHeight;
-    if (typeof width !== "number" || !Number.isFinite(width) || width <= 0 || typeof height !== "number" || !Number.isFinite(height) || height <= 0) {
+    if (
+      typeof width !== "number" || !Number.isFinite(width) || width <= 0 ||
+      typeof height !== "number" || !Number.isFinite(height) || height <= 0
+    ) {
       throw new Error("Chrome did not report a valid viewport size");
     }
-    return { width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) };
+    const pageX = viewport?.pageX;
+    const pageY = viewport?.pageY;
+    return {
+      x: typeof pageX === "number" && Number.isFinite(pageX) ? pageX : 0,
+      y: typeof pageY === "number" && Number.isFinite(pageY) ? pageY : 0,
+      width: Math.max(1, Math.round(width)),
+      height: Math.max(1, Math.round(height)),
+    };
   }
 
   private async findSensitiveRegions(tabId: number): Promise<MaskRect[]> {
