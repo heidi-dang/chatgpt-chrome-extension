@@ -7,6 +7,8 @@ export const BROWSER_ACTIONS = [
   "attach",
   "detach",
   "list_tabs",
+  "open_dedicated",
+  "batch",
   "get_tab",
   "activate_tab",
   "open_tab",
@@ -83,8 +85,31 @@ export const HUMAN_INPUT_TYPES = [
 export type HumanInputType = (typeof HUMAN_INPUT_TYPES)[number];
 export type BrowserMode = "DISCONNECTED" | "OBSERVING" | "AGENT_CONTROL" | "HANDOFF_REQUIRED" | "HUMAN_CONTROL";
 
+export const BATCHABLE_BROWSER_ACTIONS = [
+  "click",
+  "double_click",
+  "right_click",
+  "hover",
+  "type",
+  "fill",
+  "clear",
+  "press_key",
+  "key_down",
+  "key_up",
+  "scroll",
+  "drag",
+  "select_option",
+  "check",
+  "uncheck",
+  "focus",
+] as const satisfies readonly BrowserAction[];
+
+const BATCHABLE_ACTIONS = new Set<BrowserAction>(BATCHABLE_BROWSER_ACTIONS);
+const MAX_BATCH_STEPS = 24;
+
 const MUTATING_ACTIONS = new Set<BrowserAction>([
   "attach",
+  "batch",
   "detach",
   "activate_tab",
   "open_tab",
@@ -125,6 +150,10 @@ export function actionMutatesBrowser(action: BrowserAction): boolean {
   return MUTATING_ACTIONS.has(action);
 }
 
+export function actionCanBatch(action: BrowserAction): boolean {
+  return BATCHABLE_ACTIONS.has(action);
+}
+
 const modeSchema = z.enum([
   "DISCONNECTED",
   "OBSERVING",
@@ -155,6 +184,29 @@ const commandPayloadSchema = z.object({
       path: ["expected_epoch"],
       message: "Mutating browser action requires expected lease epoch",
     });
+  }
+  if (payload.action !== "batch") return;
+  const steps = payload.args.steps;
+  if (!Array.isArray(steps) || steps.length < 1 || steps.length > MAX_BATCH_STEPS) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["args", "steps"],
+      message: `Batch requires 1-${MAX_BATCH_STEPS} bounded browser steps`,
+    });
+    return;
+  }
+  for (const [index, value] of steps.entries()) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      ctx.addIssue({ code: "custom", path: ["args", "steps", index], message: "Batch step must be an object" });
+      continue;
+    }
+    const step = value as Record<string, unknown>;
+    if (typeof step.action !== "string" || !BATCHABLE_ACTIONS.has(step.action as BrowserAction)) {
+      ctx.addIssue({ code: "custom", path: ["args", "steps", index, "action"], message: "Batch step action is not allowed" });
+    }
+    if (step.args !== undefined && (!step.args || typeof step.args !== "object" || Array.isArray(step.args))) {
+      ctx.addIssue({ code: "custom", path: ["args", "steps", index, "args"], message: "Batch step args must be an object" });
+    }
   }
 });
 
@@ -210,6 +262,7 @@ const simpleServerMessageSchema = z.object({
     "browser.handoff.prepare_return",
     "browser.handoff.returned",
     "browser.handoff.cancelled",
+    "browser.handoff.rejected",
   ]),
   command_id: z.string().min(1).max(200).optional(),
   payload: z.record(z.string(), z.unknown()).default({}),

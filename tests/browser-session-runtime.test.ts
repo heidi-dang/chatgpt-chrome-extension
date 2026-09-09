@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { BrowserSessionRuntime, type BrowserHandoffMessage, type BrowserPrepareReturnMessage } from "../src/background/browser-session-runtime.js";
+import { BrowserSessionRuntime, type BrowserHandoffMessage, type BrowserHandoffRejectedMessage, type BrowserPrepareReturnMessage } from "../src/background/browser-session-runtime.js";
 import type { BrowserCommandMessage, HumanInputMessage } from "../src/transport/protocol.js";
 
 const visualTransport = { sendFrame: vi.fn(() => true) };
@@ -62,7 +62,11 @@ describe("BrowserSessionRuntime pre-session discovery", () => {
 describe("BrowserSessionRuntime restart recovery", () => {
   it("restores the persisted HUMAN lease before replayed commands can mutate", async () => {
     const sendCommand = vi.fn<(source: chrome.debugger.Debuggee, method: string, params?: object) => Promise<object>>();
-    sendCommand.mockResolvedValue({});
+    sendCommand.mockImplementation(async (_source: chrome.debugger.Debuggee, method: string) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "frame_restore" } } };
+      if (method === "Page.createIsolatedWorld") return { executionContextId: 41 };
+      return {};
+    });
     const debuggerApi = {
       attach: vi.fn(async () => undefined),
       detach: vi.fn(async () => undefined),
@@ -127,6 +131,8 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
     });
     const runtime = new BrowserSessionRuntime(visualTransport as never);
     debuggerApi.sendCommand.mockImplementation(async (_source: chrome.debugger.Debuggee, method: string) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "frame_handoff" } } };
+      if (method === "Page.createIsolatedWorld") return { executionContextId: 42 };
       if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 1000, clientHeight: 500 } };
       if (method === "Accessibility.getFullAXTree") return { nodes: [{ backendDOMNodeId: 1, role: { value: "button" }, name: { value: "Continue" } }] };
       return {};
@@ -165,6 +171,22 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
     const humanResult = await runtime.handleHumanInput(humanInput);
     expect(humanResult.type).toBe("browser.command.completed");
 
+    const beforeLocalReturn = sendCommand.mock.calls.length;
+    const localReturn = await runtime.prepareHumanReturnRequest();
+    expect(localReturn.expectedEpoch).toBe(10);
+    expect(localReturn.freshSnapshotId).toMatch(/^snap_/);
+    expect(sendCommand.mock.calls.slice(beforeLocalReturn).some(([, method, params]) =>
+      method === "Input.setIgnoreInputEvents" && (params as { ignore?: boolean } | undefined)?.ignore === true
+    )).toBe(true);
+    const rejectedReturn = {
+      ...envelope("browser.handoff.rejected", { owner: "human", epoch: 10 }),
+      mode: "HUMAN_CONTROL",
+      sequence: 4,
+    } as BrowserHandoffRejectedMessage;
+    await runtime.rejectHandoff(rejectedReturn);
+    expect(sendCommand.mock.calls.at(-1)?.[1]).toBe("Input.setIgnoreInputEvents");
+    expect(sendCommand.mock.calls.at(-1)?.[2]).toEqual({ ignore: false });
+
     const prepareReturn = {
       ...envelope("browser.handoff.prepare_return", { expected_epoch: 10 }),
       command_id: "handoff_prepare_1",
@@ -183,14 +205,32 @@ describe("BrowserSessionRuntime handoff synchronization", () => {
     } as BrowserHandoffMessage;
     await runtime.syncHandoff(returned);
 
+    const beforeBatch = sendCommand.mock.calls.length;
     const freshAgent = {
-      ...envelope("browser.command", { action: "scroll", expected_epoch: 11, args: { delta_y: 100 } }),
+      ...envelope("browser.command", {
+        action: "batch",
+        expected_epoch: 11,
+        args: {
+          steps: [
+            { action: "scroll", args: { delta_y: 100 } },
+            { action: "press_key", args: { key: "Tab", code: "Tab" } },
+          ],
+        },
+      }),
       command_id: "cmd_fresh",
       mode: "AGENT_CONTROL",
       sequence: 6,
     } as BrowserCommandMessage;
     const accepted = await runtime.handle(freshAgent);
     expect(accepted.type).toBe("browser.command.completed");
+    expect(accepted.payload).toMatchObject({ batched: true, step_count: 2 });
+    const batchCalls = sendCommand.mock.calls.slice(beforeBatch);
+    expect(batchCalls.filter(([, method]) => method === "Input.setIgnoreInputEvents").map(([, , params]) => params)).toEqual([
+      { ignore: false },
+      { ignore: true },
+      { ignore: false },
+      { ignore: true },
+    ]);
 
     const finished = {
       ...envelope("browser.handoff.cancelled", { owner: "none", epoch: 12, snapshot_id: freshSnapshotId }),

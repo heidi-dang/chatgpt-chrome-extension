@@ -25,6 +25,8 @@ input { width: 100%; border: 1px solid #303949; border-radius: 12px; padding: 12
 input:focus { border-color: #7198d8; box-shadow: 0 0 0 3px rgba(113,152,216,.16); }
 .primary { border: 0; border-radius: 12px; padding: 11px 14px; background: #e7eefc; color: #10141c; font-weight: 800; cursor: pointer; }
 .primary:hover { filter: brightness(.94); }
+.primary:disabled { cursor: default; opacity: .55; filter: none; }
+.browser-audit { margin: 10px 0 14px; font-size: 12px; }
 .pair-code { margin: 8px 0 14px; font: 800 38px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .18em; }
 code { overflow-wrap: anywhere; color: #d8e4ff; }
 .status-row { display: flex; align-items: center; gap: 8px; }

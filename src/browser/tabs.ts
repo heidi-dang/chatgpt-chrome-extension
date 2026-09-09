@@ -57,6 +57,11 @@ export class TabsController {
     return (await this.api.query({})).slice(0, 200).map(safeTab);
   }
 
+  async listInWindow(windowId: number): Promise<SafeTab[]> {
+    if (!Number.isSafeInteger(windowId) || windowId < 0) throw new Error("A valid Chrome window id is required");
+    return (await this.api.query({ windowId })).slice(0, 50).map(safeTab);
+  }
+
   async get(tabId: number): Promise<SafeTab> {
     return safeTab(await this.api.get(tabId));
   }

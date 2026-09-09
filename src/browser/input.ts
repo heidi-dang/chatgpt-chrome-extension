@@ -17,16 +17,31 @@ function centerOfQuad(values: number[] | undefined): Point {
 }
 
 export class BrowserInputController {
-  constructor(private readonly cdp: CdpSender, private readonly refs: SnapshotRefs) {}
+  private readonly pointerByTab = new Map<number, Point>();
+  private readonly pointCache = new Map<string, Point>();
+
+  constructor(
+    private readonly cdp: CdpSender,
+    private readonly refs: SnapshotRefs,
+    private readonly motionDelayMs = 4,
+  ) {}
 
   async pointForRef(tabId: number, ref: string, snapshotId: string): Promise<Point> {
+    const cacheKey = `${tabId}:${snapshotId}:${ref}`;
+    const cached = this.pointCache.get(cacheKey);
+    if (cached) return cached;
     const node = this.refs.resolve(ref, snapshotId);
     const response = await this.cdp.send(tabId, "DOM.getBoxModel", { backendNodeId: node.backendNodeId }) as BoxModelResponse;
-    return centerOfQuad(response.model?.content ?? response.model?.border);
+    const point = centerOfQuad(response.model?.content ?? response.model?.border);
+    this.pointCache.set(cacheKey, point);
+    if (this.pointCache.size > 512) this.pointCache.delete(this.pointCache.keys().next().value as string);
+    return point;
   }
 
   async click(tabId: number, ref: string, snapshotId: string, options: { button?: "left" | "right"; clickCount?: number } = {}): Promise<void> {
-    const { x, y } = await this.pointForRef(tabId, ref, snapshotId);
+    const point = await this.pointForRef(tabId, ref, snapshotId);
+    await this.movePointer(tabId, point);
+    const { x, y } = point;
     const button = options.button ?? "left";
     const clickCount = Math.min(2, Math.max(1, options.clickCount ?? 1));
     await this.cdp.send(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount });
@@ -34,8 +49,7 @@ export class BrowserInputController {
   }
 
   async hover(tabId: number, ref: string, snapshotId: string): Promise<void> {
-    const { x, y } = await this.pointForRef(tabId, ref, snapshotId);
-    await this.cdp.send(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
+    await this.movePointer(tabId, await this.pointForRef(tabId, ref, snapshotId));
   }
 
   async focus(tabId: number, ref: string, snapshotId: string): Promise<void> {
@@ -81,9 +95,9 @@ export class BrowserInputController {
   async drag(tabId: number, sourceRef: string, targetRef: string, snapshotId: string): Promise<void> {
     const source = await this.pointForRef(tabId, sourceRef, snapshotId);
     const target = await this.pointForRef(tabId, targetRef, snapshotId);
-    await this.cdp.send(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", ...source, button: "none" });
+    await this.movePointer(tabId, source);
     await this.cdp.send(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", ...source, button: "left", clickCount: 1 });
-    await this.cdp.send(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", ...target, button: "left", buttons: 1 });
+    await this.movePointer(tabId, target, { button: "left", buttons: 1 });
     await this.cdp.send(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", ...target, button: "left", clickCount: 1 });
   }
 
@@ -107,6 +121,38 @@ export class BrowserInputController {
       awaitPromise: false,
       returnByValue: true,
     });
+  }
+
+  private async movePointer(
+    tabId: number,
+    target: Point,
+    buttons: { button?: "none" | "left"; buttons?: number } = {},
+  ): Promise<void> {
+    const start = this.pointerByTab.get(tabId) ?? {
+      x: Math.max(0, target.x - 72),
+      y: Math.max(0, target.y - 48),
+    };
+    const distance = Math.hypot(target.x - start.x, target.y - start.y);
+    const steps = Math.max(3, Math.min(10, Math.ceil(distance / 80)));
+    for (let step = 1; step <= steps; step += 1) {
+      const t = step / steps;
+      const eased = t * t * (3 - 2 * t);
+      const x = start.x + (target.x - start.x) * eased;
+      const y = start.y + (target.y - start.y) * eased;
+      await this.cdp.send(tabId, "Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x,
+        y,
+        button: buttons.button ?? "none",
+        ...(buttons.buttons === undefined ? {} : { buttons: buttons.buttons }),
+      });
+      if (this.motionDelayMs > 0 && step < steps) await this.delay(this.motionDelayMs);
+    }
+    this.pointerByTab.set(tabId, target);
+  }
+
+  private async delay(milliseconds: number): Promise<void> {
+    await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
   }
 
   private async resolveObjectId(tabId: number, ref: string, snapshotId: string): Promise<string> {

@@ -114,4 +114,53 @@ describe("browser wire protocol", () => {
       payload: { action: "click", args: { ref: "ref_1" } },
     })).toThrow(/epoch/i);
   });
+
+  it("accepts a bounded input batch and rejects nested or oversized batches", () => {
+    const value = parseServerMessage({
+      protocol_version: PROTOCOL_VERSION,
+      session_id: "brs_session",
+      surface_id: "wbs_surface",
+      device_id: "bdv_device",
+      sequence: 4,
+      timestamp: "2026-09-03T01:00:00.000Z",
+      source: "cptr",
+      mode: "AGENT_CONTROL",
+      type: "browser.command",
+      command_id: "cmd_batch",
+      payload: {
+        action: "batch",
+        expected_epoch: 7,
+        args: { steps: [{ action: "click", args: { ref: "ref_1", snapshot_id: "snap_1" } }, { action: "press_key", args: { key: "Tab" } }] },
+      },
+    });
+    expect((value as BrowserCommandMessage).payload.action).toBe("batch");
+
+    expect(() => parseServerMessage({
+      protocol_version: PROTOCOL_VERSION,
+      session_id: "brs_session",
+      surface_id: "wbs_surface",
+      device_id: "bdv_device",
+      sequence: 5,
+      timestamp: "2026-09-03T01:00:00.000Z",
+      source: "cptr",
+      mode: "AGENT_CONTROL",
+      type: "browser.command",
+      command_id: "cmd_nested_batch",
+      payload: { action: "batch", expected_epoch: 7, args: { steps: [{ action: "batch", args: { steps: [] } }] } },
+    })).toThrow(/batch step action/i);
+
+    expect(() => parseServerMessage({
+      protocol_version: PROTOCOL_VERSION,
+      session_id: "brs_session",
+      surface_id: "wbs_surface",
+      device_id: "bdv_device",
+      sequence: 6,
+      timestamp: "2026-09-03T01:00:00.000Z",
+      source: "cptr",
+      mode: "AGENT_CONTROL",
+      type: "browser.command",
+      command_id: "cmd_big_batch",
+      payload: { action: "batch", expected_epoch: 7, args: { steps: Array.from({ length: 25 }, () => ({ action: "scroll", args: {} })) } },
+    })).toThrow(/1-24/i);
+  });
 });

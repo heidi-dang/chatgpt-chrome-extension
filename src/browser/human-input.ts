@@ -24,6 +24,8 @@ function modifierBits(modifiers: HumanInputMessage["payload"]["modifiers"]): num
 }
 
 export class HumanInputController {
+  private readonly viewportCache = new Map<number, { width: number; height: number; expiresAt: number }>();
+
   constructor(private readonly cdp: CdpSender) {}
 
   async handle(tabId: number, lease: BrowserLease, message: HumanInputMessage): Promise<Record<string, unknown>> {
@@ -142,10 +144,18 @@ export class HumanInputController {
   private async point(tabId: number, x: number | undefined, y: number | undefined): Promise<Point> {
     if (x === undefined || y === undefined) throw new Error("Pointer input requires normalized x and y coordinates");
     if (x < 0 || x > 1 || y < 0 || y > 1) throw new Error("Pointer coordinates must be normalized between 0 and 1");
-    const metrics = await this.cdp.send(tabId, "Page.getLayoutMetrics", {}) as ViewportMetrics;
-    const width = metrics.cssVisualViewport?.clientWidth;
-    const height = metrics.cssVisualViewport?.clientHeight;
-    if (!width || !height || width <= 0 || height <= 0) throw new Error("Live Chrome viewport metrics are unavailable");
+    const now = Date.now();
+    const cached = this.viewportCache.get(tabId);
+    let width = cached?.width;
+    let height = cached?.height;
+    if (!cached || cached.expiresAt <= now) {
+      const metrics = await this.cdp.send(tabId, "Page.getLayoutMetrics", {}) as ViewportMetrics;
+      width = metrics.cssVisualViewport?.clientWidth;
+      height = metrics.cssVisualViewport?.clientHeight;
+      if (!width || !height || width <= 0 || height <= 0) throw new Error("Live Chrome viewport metrics are unavailable");
+      this.viewportCache.set(tabId, { width, height, expiresAt: now + 750 });
+    }
+    if (!width || !height) throw new Error("Live Chrome viewport metrics are unavailable");
     return { x: x * width, y: y * height };
   }
 }
