@@ -1,5 +1,6 @@
 import { DebuggerController } from "../browser/debugger.js";
 import { BrowserInputController } from "../browser/input.js";
+import { HumanActivityController } from "../browser/human-activity.js";
 import { HumanInputController } from "../browser/human-input.js";
 import { DomInspectionController, findInSnapshot } from "../browser/dom-inspection.js";
 import { DownloadsController } from "../browser/downloads.js";
@@ -10,12 +11,12 @@ import { PageUtilitiesController } from "../browser/page-utils.js";
 import { ScreenshotController } from "../browser/screenshot.js";
 import { AccessibilitySnapshotController } from "../browser/snapshot.js";
 import { SnapshotRefs } from "../browser/snapshot-refs.js";
-import { TabsController } from "../browser/tabs.js";
+import { sanitizeBrowserUrl, TabsController } from "../browser/tabs.js";
 import { WindowsController } from "../browser/windows.js";
 import { CanvasFrameMasker, PrivacyCurtainPolicy } from "../privacy/masking.js";
 import { BrowserLease } from "../sessions/leases.js";
 import { BoundedCommandDedupe } from "../transport/idempotency.js";
-import type { BrowserCommandMessage, BrowserMode, HumanInputMessage, ServerMessage } from "../transport/protocol.js";
+import { actionCanBatch, type BrowserAction, type BrowserCommandMessage, type BrowserMode, type HumanInputMessage, type ServerMessage } from "../transport/protocol.js";
 import { BrowserFramePump } from "../transport/frame-pump.js";
 import type { DeviceVisualTransport } from "../transport/visual-websocket.js";
 import type { BrowserSessionStateRepository } from "../state/browser-session-state.js";
@@ -48,6 +49,11 @@ export type BrowserPrepareReturnMessage = ServerMessage & {
   payload: Record<string, unknown>;
 };
 
+export type BrowserHandoffRejectedMessage = ServerMessage & {
+  type: "browser.handoff.rejected";
+  payload: Record<string, unknown> & { owner?: unknown; epoch?: unknown };
+};
+
 export class BrowserSessionRuntime {
   private readonly debuggerController = new DebuggerController();
   private readonly tabs = new TabsController();
@@ -55,6 +61,7 @@ export class BrowserSessionRuntime {
   private readonly refs = new SnapshotRefs();
   private readonly snapshots = new AccessibilitySnapshotController(this.debuggerController, this.refs);
   private readonly input = new BrowserInputController(this.debuggerController, this.refs);
+  private readonly humanActivity = new HumanActivityController(this.debuggerController);
   private readonly humanInput = new HumanInputController(this.debuggerController);
   private readonly domInspection = new DomInspectionController(this.debuggerController, this.refs);
   private readonly downloads = new DownloadsController();
@@ -74,12 +81,20 @@ export class BrowserSessionRuntime {
   private sessionId: string | null = null;
   private mode: BrowserMode = "DISCONNECTED";
   private latestSnapshotText = "";
+  private currentUrl = "";
 
   constructor(
     visualTransport: DeviceVisualTransport,
     private readonly sessionState?: BrowserSessionStateRepository,
   ) {
     this.framePump = new BrowserFramePump(this.screenshots, visualTransport);
+    this.debuggerController.onEvent((tabId, method, params) => {
+      if (tabId !== this.tabId || method !== "Page.frameNavigated") return;
+      const frame = (params as { frame?: { parentId?: string; url?: string } }).frame;
+      if (!frame || frame.parentId || typeof frame.url !== "string") return;
+      const nextUrl = sanitizeBrowserUrl(frame.url);
+      if (nextUrl) this.currentUrl = nextUrl;
+    });
   }
 
   async restore(sessionId?: string): Promise<boolean> {
@@ -91,9 +106,13 @@ export class BrowserSessionRuntime {
       this.tabId = saved.tabId;
       this.sessionId = saved.sessionId;
       this.mode = saved.mode;
+      this.currentUrl = tab.url;
       this.lease = new BrowserLease({ deviceId: saved.deviceId, tabId: saved.tabId, sessionId: saved.sessionId });
       this.lease.restore(saved.owner, saved.epoch, saved.snapshotId);
       this.refs.invalidate();
+      await this.observability.enable(saved.tabId);
+      await this.humanActivity.attach(saved.tabId);
+      await this.humanActivity.setHumanControl(saved.owner === "human");
       this.updateFramePump(tab.url, false);
       return true;
     } catch {
@@ -130,7 +149,7 @@ export class BrowserSessionRuntime {
       const audit = await this.humanInput.handle(tabId, lease, message);
       this.mode = "HUMAN_CONTROL";
       await this.persist();
-      this.updateFramePump((await this.tabs.get(tabId)).url, true);
+      this.updateFramePump(this.currentUrl, true);
       return { type: "browser.command.completed", commandId: message.command_id, payload: audit };
     } catch (error) {
       return {
@@ -151,6 +170,74 @@ export class BrowserSessionRuntime {
     });
   }
 
+  controlStatus(): Record<string, unknown> {
+    const lease = this.lease?.snapshot() ?? null;
+    return {
+      active: Boolean(this.sessionId && this.tabId !== null && lease),
+      session_id: this.sessionId,
+      tab_id: this.tabId,
+      mode: this.mode,
+      owner: lease?.owner ?? "none",
+      epoch: lease?.epoch ?? 0,
+      url: this.currentUrl,
+      audit: {
+        human_activity: this.humanActivity.list(),
+        console: this.observability.listConsole(),
+        network: this.observability.listNetwork(),
+      },
+    };
+  }
+
+  requestHumanTakeover(): { deviceId: string; sessionId: string; expectedEpoch: number } {
+    const lease = this.requireLease();
+    lease.assertMutation("agent", lease.epoch);
+    return { deviceId: lease.deviceId, sessionId: lease.sessionId, expectedEpoch: lease.epoch };
+  }
+
+  async prepareHumanReturnRequest(): Promise<{
+    deviceId: string;
+    sessionId: string;
+    expectedEpoch: number;
+    freshSnapshotId: string;
+    activity: ReturnType<HumanActivityController["list"]>;
+  }> {
+    const tabId = this.requireTab();
+    const lease = this.requireLease();
+    lease.assertMutation("human", lease.epoch);
+    await this.humanActivity.freezeHumanControlForReturn();
+    try {
+      const snapshot = await this.snapshots.capture(tabId);
+      return {
+        deviceId: lease.deviceId,
+        sessionId: lease.sessionId,
+        expectedEpoch: lease.epoch,
+        freshSnapshotId: snapshot.snapshotId,
+        activity: this.humanActivity.list(),
+      };
+    } catch (error) {
+      await this.humanActivity.resumeHumanControlAfterRejectedReturn();
+      throw error;
+    }
+  }
+
+  async resumeHumanReturn(): Promise<void> {
+    const lease = this.requireLease();
+    lease.assertMutation("human", lease.epoch);
+    await this.humanActivity.resumeHumanControlAfterRejectedReturn();
+    this.mode = "HUMAN_CONTROL";
+    await this.persist();
+    this.updateFramePump(this.currentUrl, false);
+  }
+
+  async rejectHandoff(message: BrowserHandoffRejectedMessage): Promise<void> {
+    if (!this.lease || !this.sessionId || message.session_id !== this.sessionId) return;
+    const current = this.lease.snapshot();
+    const owner = message.payload.owner;
+    const epoch = message.payload.epoch;
+    if (owner !== "human" || epoch !== current.epoch || current.owner !== "human") return;
+    await this.resumeHumanReturn();
+  }
+
   async prepareReturn(message: BrowserPrepareReturnMessage): Promise<RuntimeResult> {
     try {
       if (!this.sessionId || message.session_id !== this.sessionId) throw new Error("Browser session does not match the active tab");
@@ -164,7 +251,7 @@ export class BrowserSessionRuntime {
       const snapshot = await this.snapshots.capture(tabId);
       this.mode = "HUMAN_CONTROL";
       await this.persist();
-      this.updateFramePump((await this.tabs.get(tabId)).url, false);
+      this.updateFramePump(this.currentUrl, false);
       return {
         type: "browser.command.completed",
         commandId: message.command_id,
@@ -198,12 +285,15 @@ export class BrowserSessionRuntime {
       if (current.owner !== "agent" || epoch !== current.epoch + 1) throw new Error("Unexpected human handoff epoch");
       this.lease.transferToHuman(current.epoch);
       this.mode = "HUMAN_CONTROL";
+      this.humanActivity.clear();
+      await this.humanActivity.setHumanControl(true);
     } else if (owner === "agent") {
       const snapshotId = typeof payload.snapshot_id === "string" ? payload.snapshot_id : "";
       if (current.owner !== "human" || epoch !== current.epoch + 1 || !snapshotId) throw new Error("Unexpected agent return epoch");
       this.lease.returnToAgent(current.epoch, snapshotId);
       this.refs.invalidate();
       this.mode = "AGENT_CONTROL";
+      await this.humanActivity.setHumanControl(false);
     } else if (owner === "none") {
       await this.close();
       return;
@@ -211,13 +301,15 @@ export class BrowserSessionRuntime {
       throw new Error("Unsupported browser handoff owner");
     }
     await this.persist();
-    const tabId = this.requireTab();
-    this.updateFramePump((await this.tabs.get(tabId)).url, false);
+    this.updateFramePump(this.currentUrl, false);
   }
 
   async close(): Promise<void> {
     const tabId = this.tabId;
-    if (tabId !== null) await this.debuggerController.detach(tabId);
+    if (tabId !== null) {
+      await this.humanActivity.detach();
+      await this.debuggerController.detach(tabId);
+    }
     this.stop();
   }
 
@@ -235,6 +327,8 @@ export class BrowserSessionRuntime {
     this.sessionId = null;
     this.mode = "DISCONNECTED";
     this.latestSnapshotText = "";
+    this.currentUrl = "";
+    this.humanActivity.clear();
     this.observability.clear();
   }
 
@@ -247,27 +341,43 @@ export class BrowserSessionRuntime {
       this.tabId = tabId;
       this.sessionId = message.session_id;
       this.mode = message.mode;
+      this.currentUrl = tab.url;
       this.lease = new BrowserLease({ deviceId: message.device_id, tabId, sessionId: message.session_id });
       if (expectedEpoch === undefined) throw new Error("attach requires expected_epoch");
       const lease = this.lease.bootstrapAgent(expectedEpoch);
+      await this.observability.enable(tabId);
+      await this.humanActivity.attach(tabId);
+      await this.humanActivity.setHumanControl(false);
       await this.persist();
       this.updateFramePump(tab.url, false);
-      return { tab, lease };
+      return { tab, lease, dedicated: true, audit_enabled: true };
     }
     if (action === "detach") {
       const tabId = this.requireTab();
       const lease = this.requireLease();
       if (expectedEpoch === undefined) throw new Error("detach requires expected_epoch");
       lease.assertMutation("agent", expectedEpoch);
+      await this.humanActivity.detach();
       await this.debuggerController.detach(tabId);
       this.stop();
       return { detached: true };
     }
-    // Tab discovery is intentionally available before a browser session is
-    // attached. CPTR uses this read-only command to resolve a real tab_id
-    // without creating a circular open_session -> list_tabs dependency.
+    // Device bootstrap actions are intentionally available before a browser
+    // session is attached. Dedicated-window creation is accepted only on the
+    // device-scoped OBSERVING envelope used by CPTR session bootstrap.
     if (action === "list_tabs") {
       return { tabs: await this.tabs.list() };
+    }
+    if (action === "open_dedicated") {
+      if (message.mode !== "OBSERVING" || !message.session_id.startsWith("device_")) {
+        throw new Error("open_dedicated is restricted to device bootstrap");
+      }
+      const requestedUrl = typeof args.url === "string" && args.url ? args.url : "about:blank";
+      const window = await this.windows.create(requestedUrl);
+      const tabs = await this.tabs.listInWindow(window.id);
+      const tab = tabs.find((candidate) => candidate.active) ?? tabs[0];
+      if (!tab) throw new Error("Dedicated Chrome window did not create a tab");
+      return { dedicated: true, window, tab };
     }
     const tabId = this.requireTab();
     const lease = this.requireLease();
@@ -276,7 +386,12 @@ export class BrowserSessionRuntime {
 
     switch (action) {
       case "status":
-        return { attached: this.debuggerController.isAttached(tabId), tab: await this.tabs.get(tabId), lease: lease.snapshot() };
+        return {
+          ...this.controlStatus(),
+          attached: this.debuggerController.isAttached(tabId),
+          tab: await this.tabs.get(tabId),
+          lease: lease.snapshot(),
+        };
       case "get_tab":
         return { tab: await this.tabs.get(tabId) };
       case "activate_tab":
@@ -308,7 +423,8 @@ export class BrowserSessionRuntime {
         const result = await this.navigation.navigate(tabId, url);
         this.refs.invalidate();
         this.latestSnapshotText = "";
-        this.updateFramePump(url, true);
+        this.currentUrl = sanitizeBrowserUrl(url);
+        this.updateFramePump(this.currentUrl, true);
         return { navigation: result };
       }
       case "back":
@@ -336,7 +452,7 @@ export class BrowserSessionRuntime {
       case "snapshot": {
         const snapshot = await this.snapshots.capture(tabId);
         this.latestSnapshotText = snapshot.text;
-        this.updateFramePump((await this.tabs.get(tabId)).url, false);
+        this.updateFramePump(this.currentUrl, false);
         return snapshot;
       }
       case "get_url":
@@ -387,82 +503,28 @@ export class BrowserSessionRuntime {
           maskedRegions: result.maskedRegions,
         };
       }
+      case "batch":
+        return await this.executeBatch(tabId, args);
       case "click":
-        await this.input.click(tabId, this.requireString(args.ref, "click requires ref"), this.requireSnapshotId(args));
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { clicked: true };
       case "double_click":
-        await this.input.click(tabId, this.requireString(args.ref, "double_click requires ref"), this.requireSnapshotId(args), { clickCount: 2 });
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { clicked: true };
       case "right_click":
-        await this.input.click(tabId, this.requireString(args.ref, "right_click requires ref"), this.requireSnapshotId(args), { button: "right" });
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { clicked: true };
       case "hover":
-        await this.input.hover(tabId, this.requireString(args.ref, "hover requires ref"), this.requireSnapshotId(args));
-        return { hovered: true };
       case "type":
-        await this.input.type(tabId, this.requireString(args.ref, "type requires ref"), this.requireSnapshotId(args), this.requireString(args.text, "type requires text"));
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { typed: true };
       case "fill":
-        await this.input.fill(tabId, this.requireString(args.ref, "fill requires ref"), this.requireSnapshotId(args), this.requireString(args.text, "fill requires text"));
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { filled: true };
       case "clear":
-        await this.input.clear(tabId, this.requireString(args.ref, "clear requires ref"), this.requireSnapshotId(args));
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { cleared: true };
       case "press_key":
-        await this.input.pressKey(tabId, this.requireString(args.key, "press_key requires key"), typeof args.code === "string" ? args.code : undefined);
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { pressed: true };
       case "key_down":
-        await this.input.keyDown(tabId, this.requireString(args.key, "key_down requires key"), typeof args.code === "string" ? args.code : undefined);
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { key_down: true };
       case "key_up":
-        await this.input.keyUp(tabId, this.requireString(args.key, "key_up requires key"), typeof args.code === "string" ? args.code : undefined);
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { key_up: true };
       case "scroll":
-        await this.input.scroll(
-          tabId,
-          typeof args.delta_x === "number" ? args.delta_x : 0,
-          typeof args.delta_y === "number" ? args.delta_y : 600,
-        );
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { scrolled: true };
       case "drag":
-        await this.input.drag(
-          tabId,
-          this.requireString(args.source_ref, "drag requires source_ref"),
-          this.requireString(args.target_ref, "drag requires target_ref"),
-          this.requireSnapshotId(args),
-        );
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { dragged: true };
       case "select_option":
-        await this.input.selectOption(
-          tabId,
-          this.requireString(args.ref, "select_option requires ref"),
-          this.requireSnapshotId(args),
-          this.requireString(args.value, "select_option requires value"),
-        );
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { selected: true };
       case "check":
-        await this.input.setChecked(tabId, this.requireString(args.ref, "check requires ref"), this.requireSnapshotId(args), true);
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { checked: true };
       case "uncheck":
-        await this.input.setChecked(tabId, this.requireString(args.ref, "uncheck requires ref"), this.requireSnapshotId(args), false);
-        this.updateFramePump((await this.tabs.get(tabId)).url, true);
-        return { checked: false };
-      case "focus":
-        await this.input.focus(tabId, this.requireString(args.ref, "focus requires ref"), this.requireSnapshotId(args));
-        return { focused: true };
+      case "focus": {
+        const result = await this.executeBatchableAction(tabId, action, args);
+        this.updateFramePump(this.currentUrl, true);
+        return result;
+      }
       case "handle_dialog":
         await this.pageUtilities.handleDialog(
           tabId,
@@ -494,6 +556,110 @@ export class BrowserSessionRuntime {
         );
       default:
         throw new Error("Browser action is not implemented by this extension build");
+    }
+  }
+
+  private async executeBatch(tabId: number, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const steps = args.steps;
+    if (!Array.isArray(steps) || steps.length < 1 || steps.length > 24) {
+      throw new Error("Batch requires 1-24 bounded browser steps");
+    }
+    const results: Array<Record<string, unknown>> = [];
+    for (const [index, value] of steps.entries()) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`Batch step ${index} must be an object`);
+      }
+      const step = value as Record<string, unknown>;
+      const action = step.action;
+      if (typeof action !== "string" || !actionCanBatch(action as BrowserAction)) {
+        throw new Error(`Batch step ${index} action is not allowed`);
+      }
+      const stepArgs = step.args === undefined ? {} : step.args;
+      if (!stepArgs || typeof stepArgs !== "object" || Array.isArray(stepArgs)) {
+        throw new Error(`Batch step ${index} args must be an object`);
+      }
+      try {
+        const result = await this.executeBatchableAction(tabId, action as BrowserAction, stepArgs as Record<string, unknown>);
+        results.push({ index, action, result });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "browser step failed";
+        throw new Error(`Batch step ${index} (${action}) failed: ${message}`, { cause: error });
+      }
+    }
+    this.updateFramePump(this.currentUrl, true);
+    return { batched: true, step_count: results.length, results };
+  }
+
+  private async executeBatchableAction(
+    tabId: number,
+    action: BrowserAction,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    switch (action) {
+      case "click":
+        await this.humanActivity.withAgentInput(() => this.input.click(tabId, this.requireString(args.ref, "click requires ref"), this.requireSnapshotId(args)));
+        return { clicked: true };
+      case "double_click":
+        await this.humanActivity.withAgentInput(() => this.input.click(tabId, this.requireString(args.ref, "double_click requires ref"), this.requireSnapshotId(args), { clickCount: 2 }));
+        return { clicked: true };
+      case "right_click":
+        await this.humanActivity.withAgentInput(() => this.input.click(tabId, this.requireString(args.ref, "right_click requires ref"), this.requireSnapshotId(args), { button: "right" }));
+        return { clicked: true };
+      case "hover":
+        await this.humanActivity.withAgentInput(() => this.input.hover(tabId, this.requireString(args.ref, "hover requires ref"), this.requireSnapshotId(args)));
+        return { hovered: true };
+      case "type":
+        await this.humanActivity.withAgentInput(() => this.input.type(tabId, this.requireString(args.ref, "type requires ref"), this.requireSnapshotId(args), this.requireString(args.text, "type requires text")));
+        return { typed: true };
+      case "fill":
+        await this.humanActivity.withAgentInput(() => this.input.fill(tabId, this.requireString(args.ref, "fill requires ref"), this.requireSnapshotId(args), this.requireString(args.text, "fill requires text")));
+        return { filled: true };
+      case "clear":
+        await this.humanActivity.withAgentInput(() => this.input.clear(tabId, this.requireString(args.ref, "clear requires ref"), this.requireSnapshotId(args)));
+        return { cleared: true };
+      case "press_key":
+        await this.humanActivity.withAgentInput(() => this.input.pressKey(tabId, this.requireString(args.key, "press_key requires key"), typeof args.code === "string" ? args.code : undefined));
+        return { pressed: true };
+      case "key_down":
+        await this.humanActivity.withAgentInput(() => this.input.keyDown(tabId, this.requireString(args.key, "key_down requires key"), typeof args.code === "string" ? args.code : undefined));
+        return { key_down: true };
+      case "key_up":
+        await this.humanActivity.withAgentInput(() => this.input.keyUp(tabId, this.requireString(args.key, "key_up requires key"), typeof args.code === "string" ? args.code : undefined));
+        return { key_up: true };
+      case "scroll":
+        await this.humanActivity.withAgentInput(() => this.input.scroll(
+          tabId,
+          typeof args.delta_x === "number" ? args.delta_x : 0,
+          typeof args.delta_y === "number" ? args.delta_y : 600,
+        ));
+        return { scrolled: true };
+      case "drag":
+        await this.humanActivity.withAgentInput(() => this.input.drag(
+          tabId,
+          this.requireString(args.source_ref, "drag requires source_ref"),
+          this.requireString(args.target_ref, "drag requires target_ref"),
+          this.requireSnapshotId(args),
+        ));
+        return { dragged: true };
+      case "select_option":
+        await this.input.selectOption(
+          tabId,
+          this.requireString(args.ref, "select_option requires ref"),
+          this.requireSnapshotId(args),
+          this.requireString(args.value, "select_option requires value"),
+        );
+        return { selected: true };
+      case "check":
+        await this.input.setChecked(tabId, this.requireString(args.ref, "check requires ref"), this.requireSnapshotId(args), true);
+        return { checked: true };
+      case "uncheck":
+        await this.input.setChecked(tabId, this.requireString(args.ref, "uncheck requires ref"), this.requireSnapshotId(args), false);
+        return { checked: false };
+      case "focus":
+        await this.input.focus(tabId, this.requireString(args.ref, "focus requires ref"), this.requireSnapshotId(args));
+        return { focused: true };
+      default:
+        throw new Error("Browser action is not batchable");
     }
   }
 

@@ -43,7 +43,11 @@ describe("BrowserSessionRuntimeRegistry", () => {
     const debuggerApi = {
       attach: vi.fn(async () => undefined),
       detach: vi.fn(async () => undefined),
-      sendCommand: vi.fn(async () => ({})),
+      sendCommand: vi.fn(async (_source: chrome.debugger.Debuggee, method: string) => {
+        if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "frame_multi" } } };
+        if (method === "Page.createIsolatedWorld") return { executionContextId: 41 };
+        return {};
+      }),
       onDetach: { addListener: vi.fn() },
     };
     const tabs = new Map<number, Partial<chrome.tabs.Tab>>([
@@ -96,7 +100,11 @@ describe("BrowserSessionRuntimeRegistry", () => {
     const debuggerApi = {
       attach: vi.fn(async () => undefined),
       detach: vi.fn(async () => undefined),
-      sendCommand: vi.fn(async () => ({})),
+      sendCommand: vi.fn(async (_source: chrome.debugger.Debuggee, method: string) => {
+        if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "frame_disconnect" } } };
+        if (method === "Page.createIsolatedWorld") return { executionContextId: 42 };
+        return {};
+      }),
       onDetach: { addListener: vi.fn() },
     };
     const tabs = new Map<number, Partial<chrome.tabs.Tab>>([

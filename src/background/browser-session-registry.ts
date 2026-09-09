@@ -4,6 +4,7 @@ import type { DeviceVisualTransport } from "../transport/visual-websocket.js";
 import {
   BrowserSessionRuntime,
   type BrowserHandoffMessage,
+  type BrowserHandoffRejectedMessage,
   type BrowserPrepareReturnMessage,
   type RuntimeResult,
 } from "./browser-session-runtime.js";
@@ -54,7 +55,7 @@ export class BrowserSessionRuntimeRegistry {
   }
 
   async handleCommand(message: BrowserCommandMessage): Promise<RuntimeResult> {
-    if (message.payload.action === "list_tabs") {
+    if (message.payload.action === "list_tabs" || message.payload.action === "open_dedicated") {
       return await this.discoveryRuntime.handle(message);
     }
 
@@ -89,6 +90,41 @@ export class BrowserSessionRuntimeRegistry {
     if (runtime) await runtime.close();
     else await this.sessionState.clear(sessionId);
     this.runtimes.delete(sessionId);
+  }
+
+  controlStatusForTab(tabId: number): Record<string, unknown> | null {
+    const runtime = this.runtimeForTab(tabId);
+    return runtime?.controlStatus() ?? null;
+  }
+
+  requestHumanTakeoverForTab(tabId: number): { deviceId: string; sessionId: string; expectedEpoch: number } {
+    const runtime = this.runtimeForTab(tabId);
+    if (!runtime) throw new Error("This tab is not an active CPTR dedicated browser session");
+    return runtime.requestHumanTakeover();
+  }
+
+  async prepareHumanReturnForTab(tabId: number) {
+    const runtime = this.runtimeForTab(tabId);
+    if (!runtime) throw new Error("This tab is not an active CPTR dedicated browser session");
+    return await runtime.prepareHumanReturnRequest();
+  }
+
+  async resumeHumanReturnForTab(tabId: number): Promise<void> {
+    const runtime = this.runtimeForTab(tabId);
+    if (!runtime) return;
+    await runtime.resumeHumanReturn();
+  }
+
+  async rejectHandoff(message: BrowserHandoffRejectedMessage): Promise<void> {
+    const runtime = await this.runtimeFor(message.session_id, true);
+    await runtime.rejectHandoff(message);
+  }
+
+  private runtimeForTab(tabId: number): BrowserSessionRuntime | null {
+    for (const runtime of this.runtimes.values()) {
+      if (runtime.controlStatus().tab_id === tabId) return runtime;
+    }
+    return null;
   }
 
   private createRuntime(): BrowserSessionRuntime {

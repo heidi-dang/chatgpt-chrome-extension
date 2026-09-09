@@ -105,12 +105,21 @@ describe("ref-based input", () => {
     expect(cdp.calls[0]).toEqual({ tabId: 7, method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", key: "Shift", code: "ShiftLeft", modifiers: 0 } });
     expect(cdp.calls[1]).toEqual({ tabId: 7, method: "Input.dispatchKeyEvent", params: { type: "keyUp", key: "Shift", code: "ShiftLeft", modifiers: 0 } });
     expect(cdp.calls.filter((call) => call.method === "DOM.getBoxModel")).toHaveLength(2);
-    expect(cdp.calls.filter((call) => call.method === "Input.dispatchMouseEvent").map((call) => call.params)).toEqual([
-      { type: "mouseMoved", x: 60, y: 40, button: "none" },
-      { type: "mousePressed", x: 60, y: 40, button: "left", clickCount: 1 },
-      { type: "mouseMoved", x: 60, y: 40, button: "left", buttons: 1 },
-      { type: "mouseReleased", x: 60, y: 40, button: "left", clickCount: 1 },
-    ]);
+    const mouseEvents = cdp.calls
+      .filter((call) => call.method === "Input.dispatchMouseEvent")
+      .map((call) => call.params as Record<string, unknown>);
+    const pressedIndex = mouseEvents.findIndex((event) => event.type === "mousePressed");
+    const releasedIndex = mouseEvents.findIndex((event) => event.type === "mouseReleased");
+    expect(pressedIndex).toBeGreaterThan(1);
+    expect(releasedIndex).toBeGreaterThan(pressedIndex);
+    expect(mouseEvents[pressedIndex]).toEqual({ type: "mousePressed", x: 60, y: 40, button: "left", clickCount: 1 });
+    expect(mouseEvents[releasedIndex]).toEqual({ type: "mouseReleased", x: 60, y: 40, button: "left", clickCount: 1 });
+    const approachMoves = mouseEvents.slice(0, pressedIndex);
+    expect(approachMoves.length).toBeGreaterThan(1);
+    expect(approachMoves.at(-1)).toEqual({ type: "mouseMoved", x: 60, y: 40, button: "none" });
+    const dragMoves = mouseEvents.slice(pressedIndex + 1, releasedIndex);
+    expect(dragMoves.length).toBeGreaterThanOrEqual(1);
+    expect(dragMoves.at(-1)).toEqual({ type: "mouseMoved", x: 60, y: 40, button: "left", buttons: 1 });
   });
 
   it("clicks the center of the referenced DOM box without screenshot coordinates", async () => {

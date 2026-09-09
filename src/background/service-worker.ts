@@ -5,7 +5,7 @@ import { BrowserSessionStateRepository } from "../state/browser-session-state.js
 import { DeviceControlTransport, type DeviceConnectionState } from "../transport/websocket.js";
 import { DeviceVisualTransport } from "../transport/visual-websocket.js";
 import { PROTOCOL_VERSION } from "../transport/protocol.js";
-import type { BrowserHandoffMessage, BrowserPrepareReturnMessage } from "./browser-session-runtime.js";
+import type { BrowserHandoffMessage, BrowserHandoffRejectedMessage, BrowserPrepareReturnMessage } from "./browser-session-runtime.js";
 import { BrowserSessionRuntimeRegistry } from "./browser-session-registry.js";
 
 const localStorage = chromeLocalStorage();
@@ -22,6 +22,8 @@ const isHandoffMessage = (message: { type: string }): message is BrowserHandoffM
   message.type === "browser.handoff.cancelled";
 const isPrepareReturnMessage = (message: { type: string }): message is BrowserPrepareReturnMessage =>
   message.type === "browser.handoff.prepare_return";
+const isRejectedHandoffMessage = (message: { type: string }): message is BrowserHandoffRejectedMessage =>
+  message.type === "browser.handoff.rejected";
 
 function diagnosticError(scope: string, error: unknown): void {
   const normalized = error instanceof Error ? error : new Error(String(error));
@@ -30,6 +32,13 @@ function diagnosticError(scope: string, error: unknown): void {
 
 function diagnosticState(state: DeviceConnectionState): void {
   console.info(`[CPTR] control transport state=${state}`);
+}
+
+async function activeTabId(): Promise<number> {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabId = tabs[0]?.id;
+  if (!Number.isSafeInteger(tabId) || (tabId as number) < 0) throw new Error("Active Chrome tab is unavailable");
+  return tabId as number;
 }
 
 const visualTransport = new DeviceVisualTransport({
@@ -128,6 +137,10 @@ const transport = new DeviceControlTransport({
       void browserRuntimes.syncHandoff(message).catch((error: unknown) => diagnosticError("handoff synchronization", error));
       return;
     }
+    if (isRejectedHandoffMessage(message)) {
+      void browserRuntimes.rejectHandoff(message).catch((error: unknown) => diagnosticError("handoff rejection", error));
+      return;
+    }
     if (message.type === "browser.session.stop") {
       void browserRuntimes.stopSession(message.session_id).catch((error: unknown) => diagnosticError("session stop", error));
     }
@@ -182,6 +195,66 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
           : { paired: false },
       }))
       .catch(() => sendResponse({ ok: false, error: "Device status unavailable" }));
+    return true;
+  }
+
+  if (type === "browser.control.status") {
+    void activeTabId()
+      .then((tabId) => sendResponse({ ok: true, result: browserRuntimes.controlStatusForTab(tabId) ?? { active: false } }))
+      .catch((error: unknown) => sendResponse({ ok: false, error: error instanceof Error ? error.message : "Browser control status unavailable" }));
+    return true;
+  }
+
+  if (type === "browser.control.takeover") {
+    void activeTabId()
+      .then((tabId) => browserRuntimes.requestHumanTakeoverForTab(tabId))
+      .then((request) => {
+        const sent = transport.send({
+          protocol_version: PROTOCOL_VERSION,
+          type: "browser.handoff.request",
+          device_id: request.deviceId,
+          session_id: request.sessionId,
+          timestamp: new Date().toISOString(),
+          source: "human",
+          mode: "AGENT_CONTROL",
+          payload: {
+            expected_epoch: request.expectedEpoch,
+            expected_owner: "agent",
+            new_owner: "human",
+          },
+        });
+        if (!sent) throw new Error("CPTR control channel is offline");
+        sendResponse({ ok: true, result: { requested: true } });
+      })
+      .catch((error: unknown) => sendResponse({ ok: false, error: error instanceof Error ? error.message : "Browser takeover failed" }));
+    return true;
+  }
+
+  if (type === "browser.control.return") {
+    void (async () => {
+      const tabId = await activeTabId();
+      const request = await browserRuntimes.prepareHumanReturnForTab(tabId);
+      const sent = transport.send({
+        protocol_version: PROTOCOL_VERSION,
+        type: "browser.handoff.request",
+        device_id: request.deviceId,
+        session_id: request.sessionId,
+        timestamp: new Date().toISOString(),
+        source: "human",
+        mode: "HUMAN_CONTROL",
+        payload: {
+          expected_epoch: request.expectedEpoch,
+          expected_owner: "human",
+          new_owner: "agent",
+          fresh_snapshot_id: request.freshSnapshotId,
+        },
+      });
+      if (!sent) {
+        await browserRuntimes.resumeHumanReturnForTab(tabId);
+        throw new Error("CPTR control channel is offline");
+      }
+      sendResponse({ ok: true, result: { requested: true, activityCount: request.activity.length } });
+    })().catch((error: unknown) => sendResponse({ ok: false, error: error instanceof Error ? error.message : "Returning browser control failed" }));
     return true;
   }
 
