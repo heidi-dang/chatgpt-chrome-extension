@@ -254,30 +254,94 @@ const streamConfigureMessageSchema = z.object({
   }).strict(),
 }).strict();
 
-const simpleServerMessageSchema = z.object({
+const browserOwnerSchema = z.enum(["none", "agent", "human"]);
+const snapshotIdSchema = z.string().min(1).max(200);
+
+const sessionStopMessageSchema = z.object({
   ...baseEnvelopeFields,
-  type: z.enum([
-    "browser.session.stop",
-    "browser.handoff.accepted",
-    "browser.handoff.prepare_return",
-    "browser.handoff.returned",
-    "browser.handoff.cancelled",
-    "browser.handoff.rejected",
-  ]),
+  type: z.literal("browser.session.stop"),
   command_id: z.string().min(1).max(200).optional(),
   payload: z.record(z.string(), z.unknown()).default({}),
 }).strict();
 
-const serverMessageSchema = z.union([
-  browserCommandMessageSchema,
-  humanInputMessageSchema,
-  streamConfigureMessageSchema,
-  simpleServerMessageSchema,
-]);
+const handoffAcceptedMessageSchema = z.object({
+  ...baseEnvelopeFields,
+  type: z.literal("browser.handoff.accepted"),
+  payload: z.object({
+    owner: z.literal("human"),
+    epoch: z.number().int().nonnegative(),
+    snapshot_id: snapshotIdSchema.nullable().optional(),
+  }).strict(),
+}).strict();
+
+const handoffPrepareReturnMessageSchema = z.object({
+  ...baseEnvelopeFields,
+  type: z.literal("browser.handoff.prepare_return"),
+  command_id: z.string().min(1).max(200),
+  payload: z.object({
+    expected_epoch: z.number().int().nonnegative(),
+  }).strict(),
+}).strict();
+
+const handoffReturnedMessageSchema = z.object({
+  ...baseEnvelopeFields,
+  type: z.literal("browser.handoff.returned"),
+  payload: z.object({
+    owner: z.literal("agent"),
+    epoch: z.number().int().nonnegative(),
+    snapshot_id: snapshotIdSchema,
+  }).strict(),
+}).strict();
+
+const handoffCancelledMessageSchema = z.object({
+  ...baseEnvelopeFields,
+  type: z.literal("browser.handoff.cancelled"),
+  payload: z.object({
+    owner: z.literal("none"),
+    epoch: z.number().int().nonnegative(),
+    snapshot_id: snapshotIdSchema.nullable().optional(),
+  }).strict(),
+}).strict();
+
+const handoffRejectedMessageSchema = z.object({
+  ...baseEnvelopeFields,
+  type: z.literal("browser.handoff.rejected"),
+  payload: z.object({
+    owner: browserOwnerSchema,
+    epoch: z.number().int().nonnegative(),
+  }).strict(),
+}).strict();
+
+const serverMessageSchemasByType = {
+  "browser.command": browserCommandMessageSchema,
+  "browser.human.input": humanInputMessageSchema,
+  "browser.stream.configure": streamConfigureMessageSchema,
+  "browser.session.stop": sessionStopMessageSchema,
+  "browser.handoff.accepted": handoffAcceptedMessageSchema,
+  "browser.handoff.prepare_return": handoffPrepareReturnMessageSchema,
+  "browser.handoff.returned": handoffReturnedMessageSchema,
+  "browser.handoff.cancelled": handoffCancelledMessageSchema,
+  "browser.handoff.rejected": handoffRejectedMessageSchema,
+} as const;
 
 export type BrowserCommandMessage = z.infer<typeof browserCommandMessageSchema>;
 export type HumanInputMessage = z.infer<typeof humanInputMessageSchema>;
-export type ServerMessage = z.infer<typeof serverMessageSchema>;
+export type ServerMessage =
+  | z.infer<typeof browserCommandMessageSchema>
+  | z.infer<typeof humanInputMessageSchema>
+  | z.infer<typeof streamConfigureMessageSchema>
+  | z.infer<typeof sessionStopMessageSchema>
+  | z.infer<typeof handoffAcceptedMessageSchema>
+  | z.infer<typeof handoffPrepareReturnMessageSchema>
+  | z.infer<typeof handoffReturnedMessageSchema>
+  | z.infer<typeof handoffCancelledMessageSchema>
+  | z.infer<typeof handoffRejectedMessageSchema>;
+
+type ServerMessageType = keyof typeof serverMessageSchemasByType;
+
+function isServerMessageType(value: string): value is ServerMessageType {
+  return Object.prototype.hasOwnProperty.call(serverMessageSchemasByType, value);
+}
 
 export class ProtocolValidationError extends Error {
   constructor(message: string, readonly issues: readonly z.core.$ZodIssue[] = []) {
@@ -287,13 +351,21 @@ export class ProtocolValidationError extends Error {
 }
 
 export function parseServerMessage(value: unknown): ServerMessage {
-  if (value && typeof value === "object" && "protocol_version" in value) {
-    const version = (value as { protocol_version?: unknown }).protocol_version;
-    if (version !== PROTOCOL_VERSION) {
-      throw new ProtocolValidationError(`Unsupported protocol version: ${String(version)}`);
-    }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ProtocolValidationError("Invalid browser protocol message: expected an object");
   }
-  const parsed = serverMessageSchema.safeParse(value);
+  const record = value as Record<string, unknown>;
+  if (record.protocol_version !== PROTOCOL_VERSION) {
+    throw new ProtocolValidationError(`Unsupported protocol version: ${String(record.protocol_version)}`);
+  }
+  if (typeof record.type !== "string" || !record.type) {
+    throw new ProtocolValidationError("Invalid browser protocol message at type: expected a non-empty string");
+  }
+  if (!isServerMessageType(record.type)) {
+    throw new ProtocolValidationError(`Unsupported browser protocol message type: ${record.type}`);
+  }
+  const schema = serverMessageSchemasByType[record.type];
+  const parsed = schema.safeParse(value);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const location = issue?.path.length ? ` at ${issue.path.join(".")}` : "";

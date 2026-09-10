@@ -11,13 +11,16 @@ function extensionIdFromPublicKey(base64Der: string): string {
 }
 
 describe("release extension identity", () => {
-  it("pins the unpacked and CRX builds to the production allowlisted extension ID", async () => {
+  it("keeps the Chrome manifest version aligned with the package release version", async () => {
     const manifest = JSON.parse(await readFile(new URL("../src/manifest.json", import.meta.url), "utf8")) as {
       version?: string;
       key?: string;
     };
+    const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as {
+      version?: string;
+    };
 
-    expect(manifest.version).toBe("0.1.7");
+    expect(manifest.version).toBe(packageJson.version);
     expect(manifest.key).toBeTypeOf("string");
     expect(extensionIdFromPublicKey(manifest.key ?? "")).toBe(expectedExtensionId);
   });

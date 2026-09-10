@@ -1,10 +1,23 @@
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { build } from "esbuild";
 
 const root = resolve(import.meta.dirname, "..");
 const src = resolve(root, "src");
 const dist = resolve(root, "dist");
+
+const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+const manifest = JSON.parse(await readFile(resolve(src, "manifest.json"), "utf8"));
+const releaseVersion = packageJson.version;
+const chromeVersionPattern = /^(0|[1-9]\d{0,4})(\.(0|[1-9]\d{0,4})){0,3}$/;
+if (
+  typeof releaseVersion !== "string" ||
+  !chromeVersionPattern.test(releaseVersion) ||
+  releaseVersion.split(".").some((component) => Number(component) > 65535)
+) {
+  throw new Error(`Invalid Chrome extension release version: ${String(releaseVersion)}`);
+}
+manifest.version = releaseVersion;
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
@@ -32,7 +45,6 @@ for (const [input, output] of entries) {
 }
 
 for (const [input, output] of [
-  ["manifest.json", "manifest.json"],
   ["popup/popup.html", "popup.html"],
   ["options/options.html", "options.html"],
   ["ui.css", "ui.css"],
@@ -40,4 +52,6 @@ for (const [input, output] of [
   await cp(resolve(src, input), resolve(dist, output));
 }
 
-console.log("Built CPTR Live Computer extension in dist/");
+await writeFile(resolve(dist, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+console.log(`Built CPTR Live Computer extension ${releaseVersion} in dist/`);

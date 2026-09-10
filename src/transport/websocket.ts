@@ -12,6 +12,8 @@ export interface SocketLike {
   close(code?: number, reason?: string): void;
 }
 
+const INVALID_MESSAGE_CLOSE_CODE = 4008;
+
 export type DeviceConnectionState = "OFFLINE" | "CONNECTING" | "AUTHENTICATING" | "LIVE" | "RECONNECTING";
 
 export type DeviceControlTransportOptions = {
@@ -187,7 +189,7 @@ export class DeviceControlTransport {
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));
       this.onError(normalized);
-      this.socket?.close(1008, "invalid browser-device message");
+      this.socket?.close(INVALID_MESSAGE_CLOSE_CODE, "invalid browser-device message");
     }
   }
 

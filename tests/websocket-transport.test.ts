@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DeviceStateRepository, type StorageAreaLike } from "../src/state/device-state.js";
 import { DeviceControlTransport, type SocketLike } from "../src/transport/websocket.js";
 import { PROTOCOL_VERSION } from "../src/transport/protocol.js";
+import { ReconnectPolicy } from "../src/transport/reconnect.js";
 
 class MemoryStorage implements StorageAreaLike {
   readonly values: Record<string, unknown> = {};
@@ -15,6 +16,7 @@ type Listener = (event: { data?: unknown; code?: number; reason?: string }) => v
 class FakeSocket implements SocketLike {
   readyState = 0;
   readonly sent: string[] = [];
+  readonly closes: Array<{ code: number | undefined; reason: string | undefined }> = [];
   private readonly listeners = new Map<string, Listener[]>();
 
   addEventListener(type: string, listener: Listener): void {
@@ -24,7 +26,13 @@ class FakeSocket implements SocketLike {
   }
 
   send(value: string): void { this.sent.push(value); }
-  close(): void { this.readyState = 3; }
+  close(code?: number, reason?: string): void {
+    if (code !== undefined && code !== 1000 && (code < 3000 || code > 4999)) {
+      throw new DOMException("Invalid WebSocket close code", "InvalidAccessError");
+    }
+    this.closes.push({ code, reason });
+    this.readyState = 3;
+  }
 
   open(): void {
     this.readyState = 1;
@@ -33,6 +41,10 @@ class FakeSocket implements SocketLike {
 
   message(value: unknown): void {
     for (const listener of this.listeners.get("message") ?? []) listener({ data: value });
+  }
+
+  error(): void {
+    for (const listener of this.listeners.get("error") ?? []) listener({});
   }
 
   disconnect(code = 1006, reason = "network"): void {
@@ -128,7 +140,7 @@ describe("device control WebSocket", () => {
       source: "cptr",
       mode: "DISCONNECTED",
       type: "browser.handoff.cancelled",
-      payload: {},
+      payload: { owner: "none", epoch: sequence, snapshot_id: null },
     });
     socket.message(event(831));
     socket.message(event(831));
@@ -178,7 +190,50 @@ describe("device control WebSocket", () => {
     await vi.waitFor(() => expect(onDisconnect).toHaveBeenCalledOnce());
   });
 
-  it("rejects malformed server messages instead of routing them", async () => {
+  it("recovers once after a failed WebSocket handshake without duplicate reconnects", async () => {
+    vi.useFakeTimers();
+    try {
+      const repo = await configuredRepository();
+      const firstSocket = new FakeSocket();
+      const secondSocket = new FakeSocket();
+      const sockets = [firstSocket, secondSocket];
+      let socketIndex = 0;
+      const nextSocket = () => {
+        const socket = sockets[socketIndex];
+        if (!socket) throw new Error("unexpected extra control socket");
+        socketIndex += 1;
+        return socket;
+      };
+      const onError = vi.fn();
+      const onState = vi.fn();
+      const transport = new DeviceControlTransport({
+        stateRepository: repo,
+        socketFactory: nextSocket,
+        reconnectPolicy: new ReconnectPolicy({ baseMs: 100, maxMs: 100, jitterRatio: 0 }),
+        onMessage: vi.fn(),
+        onError,
+        onState,
+      });
+
+      await transport.start();
+      expect(socketIndex).toBe(1);
+      firstSocket.error();
+      firstSocket.disconnect(1006, "handshake failed");
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onState).toHaveBeenLastCalledWith("RECONNECTING");
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(socketIndex).toBe(2);
+      secondSocket.open();
+      secondSocket.message(JSON.stringify({ protocol_version: PROTOCOL_VERSION, type: "device.authenticated", device_id: "bdv_1" }));
+      expect(onState).toHaveBeenLastCalledWith("LIVE");
+      transport.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects malformed server messages with a browser-valid application close code", async () => {
     const repo = await configuredRepository();
     const socket = new FakeSocket();
     const onMessage = vi.fn();
@@ -192,10 +247,11 @@ describe("device control WebSocket", () => {
 
     await transport.start();
     socket.open();
-    socket.message("{not-json");
+    expect(() => socket.message("{not-json")).not.toThrow();
 
     expect(onMessage).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledOnce();
+    expect(socket.closes).toEqual([{ code: 4008, reason: "invalid browser-device message" }]);
     transport.stop();
   });
 });

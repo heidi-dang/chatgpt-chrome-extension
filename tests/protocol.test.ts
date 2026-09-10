@@ -115,6 +115,53 @@ describe("browser wire protocol", () => {
     })).toThrow(/epoch/i);
   });
 
+  it("validates handoff payloads at the wire boundary with field-level errors", () => {
+    const base = {
+      protocol_version: PROTOCOL_VERSION,
+      session_id: "brs_session",
+      surface_id: "wbs_surface",
+      device_id: "bdv_device",
+      sequence: 7,
+      timestamp: "2026-09-10T11:00:00.000Z",
+      source: "cptr" as const,
+      mode: "HUMAN_CONTROL" as const,
+    };
+
+    expect(parseServerMessage({
+      ...base,
+      type: "browser.handoff.accepted",
+      payload: { owner: "human", epoch: 10, snapshot_id: null },
+    }).type).toBe("browser.handoff.accepted");
+
+    expect(() => parseServerMessage({
+      ...base,
+      type: "browser.handoff.accepted",
+      payload: { owner: "human" },
+    })).toThrow(/payload\.epoch/i);
+
+    expect(() => parseServerMessage({
+      ...base,
+      type: "browser.handoff.returned",
+      mode: "AGENT_CONTROL",
+      payload: { owner: "agent", epoch: 11, snapshot_id: null },
+    })).toThrow(/payload\.snapshot_id/i);
+  });
+
+  it("reports unsupported server message types directly instead of a union-level Invalid input", () => {
+    expect(() => parseServerMessage({
+      protocol_version: PROTOCOL_VERSION,
+      session_id: "brs_session",
+      surface_id: "wbs_surface",
+      device_id: "bdv_device",
+      sequence: 8,
+      timestamp: "2026-09-10T11:00:00.000Z",
+      source: "cptr",
+      mode: "AGENT_CONTROL",
+      type: "browser.handoff.mystery",
+      payload: {},
+    })).toThrow(/unsupported browser protocol message type.*browser\.handoff\.mystery/i);
+  });
+
   it("accepts a bounded input batch and rejects nested or oversized batches", () => {
     const value = parseServerMessage({
       protocol_version: PROTOCOL_VERSION,
