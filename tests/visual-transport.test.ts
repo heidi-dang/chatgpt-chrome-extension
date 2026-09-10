@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DeviceVisualTransport, type VisualSocketLike } from "../src/transport/visual-websocket.js";
 import { BrowserFramePump } from "../src/transport/frame-pump.js";
+import { ReconnectPolicy } from "../src/transport/reconnect.js";
 
 class FakeSocket implements VisualSocketLike {
   readyState = 1;
@@ -44,6 +45,52 @@ describe("visual transport", () => {
     const auth = JSON.parse(socket.sent[0] ?? "{}") as Record<string, unknown>;
     expect(auth.type).toBe("device.authenticate");
     expect(auth.device_credential).toBe("x".repeat(48));
+  });
+
+  it("recovers once after a visual WebSocket handshake failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstSocket = new FakeSocket();
+      const secondSocket = new FakeSocket();
+      const sockets = [firstSocket, secondSocket];
+      let socketIndex = 0;
+      const nextSocket = () => {
+        const socket = sockets[socketIndex];
+        if (!socket) throw new Error("unexpected extra visual socket");
+        socketIndex += 1;
+        return socket;
+      };
+      const onError = vi.fn();
+      const transport = new DeviceVisualTransport({
+        stateRepository: stateRepository as never,
+        socketFactory: nextSocket,
+        reconnectPolicy: new ReconnectPolicy({ baseMs: 100, maxMs: 100, jitterRatio: 0 }),
+        onError,
+      });
+
+      await transport.start();
+      expect(socketIndex).toBe(1);
+      firstSocket.emit("error");
+      firstSocket.emit("close");
+      expect(onError).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(socketIndex).toBe(2);
+      secondSocket.emit("open");
+      secondSocket.emit("message", { data: JSON.stringify({ protocol_version: 1, type: "device.visual_authenticated", device_id: "bdv_1" }) });
+      expect(transport.sendFrame({
+        sessionId: "brs_recovered",
+        frameId: "frm_recovered",
+        mimeType: "image/jpeg",
+        width: 800,
+        height: 600,
+        createdAtMs: 1,
+        dataBase64: "abc",
+      })).toBe(true);
+      transport.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drops visual frames under socket backpressure", async () => {

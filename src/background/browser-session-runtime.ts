@@ -38,21 +38,14 @@ function failurePayload(error: unknown, fallback: string): Record<string, unknow
   return { error: message, code, retriable: false };
 }
 
-export type BrowserHandoffMessage = ServerMessage & {
-  type: "browser.handoff.accepted" | "browser.handoff.returned" | "browser.handoff.cancelled";
-  payload: Record<string, unknown>;
-};
+export type BrowserHandoffMessage = Extract<
+  ServerMessage,
+  { type: "browser.handoff.accepted" | "browser.handoff.returned" | "browser.handoff.cancelled" }
+>;
 
-export type BrowserPrepareReturnMessage = ServerMessage & {
-  type: "browser.handoff.prepare_return";
-  command_id: string;
-  payload: Record<string, unknown>;
-};
+export type BrowserPrepareReturnMessage = Extract<ServerMessage, { type: "browser.handoff.prepare_return" }>;
 
-export type BrowserHandoffRejectedMessage = ServerMessage & {
-  type: "browser.handoff.rejected";
-  payload: Record<string, unknown> & { owner?: unknown; epoch?: unknown };
-};
+export type BrowserHandoffRejectedMessage = Extract<ServerMessage, { type: "browser.handoff.rejected" }>;
 
 export class BrowserSessionRuntime {
   private readonly debuggerController = new DebuggerController();
@@ -273,32 +266,25 @@ export class BrowserSessionRuntime {
 
   async syncHandoff(message: BrowserHandoffMessage): Promise<void> {
     if (!this.lease || !this.sessionId || message.session_id !== this.sessionId) return;
-    const payload = message.payload;
-    const owner = payload.owner;
-    const epoch = payload.epoch;
-    if (typeof owner !== "string" || typeof epoch !== "number" || !Number.isInteger(epoch) || epoch < 0) {
-      throw new Error("Invalid browser handoff payload");
-    }
     const current = this.lease.snapshot();
+    const epoch = message.payload.epoch;
     if (epoch <= current.epoch) return;
-    if (owner === "human") {
+
+    if (message.type === "browser.handoff.accepted") {
       if (current.owner !== "agent" || epoch !== current.epoch + 1) throw new Error("Unexpected human handoff epoch");
       this.lease.transferToHuman(current.epoch);
       this.mode = "HUMAN_CONTROL";
       this.humanActivity.clear();
       await this.humanActivity.setHumanControl(true);
-    } else if (owner === "agent") {
-      const snapshotId = typeof payload.snapshot_id === "string" ? payload.snapshot_id : "";
-      if (current.owner !== "human" || epoch !== current.epoch + 1 || !snapshotId) throw new Error("Unexpected agent return epoch");
-      this.lease.returnToAgent(current.epoch, snapshotId);
+    } else if (message.type === "browser.handoff.returned") {
+      if (current.owner !== "human" || epoch !== current.epoch + 1) throw new Error("Unexpected agent return epoch");
+      this.lease.returnToAgent(current.epoch, message.payload.snapshot_id);
       this.refs.invalidate();
       this.mode = "AGENT_CONTROL";
       await this.humanActivity.setHumanControl(false);
-    } else if (owner === "none") {
+    } else {
       await this.close();
       return;
-    } else {
-      throw new Error("Unsupported browser handoff owner");
     }
     await this.persist();
     this.updateFramePump(this.currentUrl, false);

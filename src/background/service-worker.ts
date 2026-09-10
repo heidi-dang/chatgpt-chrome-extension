@@ -141,9 +141,7 @@ const transport = new DeviceControlTransport({
       void browserRuntimes.rejectHandoff(message).catch((error: unknown) => diagnosticError("handoff rejection", error));
       return;
     }
-    if (message.type === "browser.session.stop") {
-      void browserRuntimes.stopSession(message.session_id).catch((error: unknown) => diagnosticError("session stop", error));
-    }
+    void browserRuntimes.stopSession(message.session_id).catch((error: unknown) => diagnosticError("session stop", error));
   },
 });
 const coordinator = new ExtensionCoordinator({ deviceState, pairingState, transport });
